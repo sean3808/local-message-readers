@@ -1,0 +1,35 @@
+[project]
+name = "local-message-readers"
+version = "0.1.0"
+description = "Read-only local readers that expose chat conversations to a Local Agent as JSON"
+requires-python = ">=3.13"
+dependencies = [
+    "ccl_chromium_reader",
+    "ccl_simplesnappy",
+    "ijson>=3.6.0",
+    "msal>=1.39.0",
+    "msal-extensions>=1.3.1",
+    "wechat-cli",
+]
+
+[project.scripts]
+teams-reader = "readers.teams:main"
+wechat-reader = "readers.wechat:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.16"]
+
+[tool.uv.sources]
+# Owner fork of wechat-cli. Pinned to the head commit of the fork branch pinned/pr22-weixin-4.1 (= upstream PR #22 head: upstream a378923 + the Weixin 4.1.x key fix); see issue #1 from the private era.
+# Do not track upstream main: an upstream PR is adding send capability (ADR-0002). Keep this rev; move it only after reviewing the new upstream code.
+wechat-cli = { git = "https://github.com/sean3808/wechat-cli", rev = "acfcd609c1d2fb75c67a0f13339eb3eb1810d55e" }
+# Pinned to an upstream commit (2026-08 added snappy handling that covers the Teams Blink-V8 format), see spec #10 from the private era. Do not track an upstream branch.
+ccl_chromium_reader = { git = "https://github.com/cclgroupltd/ccl_chrome_indexeddb", rev = "1bc482c0078cad4288ad0a0072ef46d7d7929596" }
+ccl_simplesnappy = { git = "https://github.com/cclgroupltd/ccl_simplesnappy", rev = "3d085230baa8c46cf2090ebba29bf6e8eab31087" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["readers"]

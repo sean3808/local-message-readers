@@ -1,0 +1,42 @@
+# Local clone of upstream tools (the upstream is not under version control)
+.vendor/
+
+# Subagent investigation reports (local work products)
+.subagent-output/
+
+# Reference conversation exports (real message content is never committed)
+fixtures/local/
+
+# Python
+__pycache__/
+
+# Reader exports / caches (no plain text is left on disk)
+*.decrypted
+decrypted/
+
+# Session handoff file (transient handoff, not in git)
+session-continuity.md
+
+# Personal agent-workflow files that are only meaningful on the owner's machine
+# (kept on disk, not in the public repo)
+CLAUDE.local.md
+docs/current-status.md
+.claude/promote-candidates.md
+.claude/promote-candidates-archive.md
+.worktreeinclude
+# Lock file of the locally installed agent skill set (restored with `npx skills experimental_install`)
+skills-lock.json
+
+# skills/ is the source; .claude/skills/ is a junction pointing at it (so Claude Code can read it), not in git
+.claude/skills/
+
+# Agent skill set read by Codex / agy (managed by `npx skills`, follows upstream); like node_modules it is not committed
+.agents/skills/
+# SSOT junction settings written by a skill-sync tool; they contain local absolute paths
+.agents/skills.json
+
+# Claude Code worktrees (used by parallel Leads)
+.claude/worktrees/
+
+# Personal settings (each person's own values); the template is settings.example.toml
+settings.toml

@@ -1,0 +1,7 @@
+# Test fixtures are byte-exact captured data; keep them exactly as stored (no EOL conversion).
+tests/fixtures/** -text
+
+# Shell and workflow files stay LF on every checkout.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

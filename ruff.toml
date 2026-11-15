@@ -1,0 +1,10 @@
+line-length = 88
+target-version = "py313"
+extend-exclude = [".vendor", "skills"]
+
+[lint]
+# Only rule sets the current code already passes. Excluded for now (existing violations,
+# not fixed in bulk): E501 line-too-long, W291 trailing-whitespace, I001 import sorting,
+# B007, C420, SIM300, SIM105, SIM112.
+select = ["E", "F", "UP"]
+ignore = ["E501"]

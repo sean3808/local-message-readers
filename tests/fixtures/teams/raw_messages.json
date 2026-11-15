@@ -1,0 +1,182 @@
+{
+  "plain_text_and_links": {
+    "id": "1001",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000000000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Please check <a href=\"https://example.com/spec\">the documentation</a>.</p>",
+    "properties": {}
+  },
+  "mentions": {
+    "id": "1002",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000001000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Hello <span itemtype=\"http://schema.skype.com/Mention\" itemscope itemid=\"0\">Alice Smith</span> welcome!</p>",
+    "properties": {}
+  },
+  "image_placeholder": {
+    "id": "1003",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000002000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Here is the diagram</p><p><img src=\"https://example.com/diagram.png\" alt=\"影像\" /></p>",
+    "properties": {}
+  },
+  "quoted_attribution": {
+    "id": "1004",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000003000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<blockquote itemscope itemtype=\"http://schema.skype.com/Reply\" itemid=\"1001\"><strong itemprop=\"mri\" itemid=\"8:alice\">Alice Smith</strong><span itemprop=\"time\" itemid=\"1780000000000\"></span><p itemprop=\"preview\">Please check the documentation</p></blockquote><p>Looks great!</p>",
+    "properties": {}
+  },
+  "quoted_display_name_filtered": {
+    "id": "1005",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000004000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<blockquote itemscope itemtype=\"http://schema.skype.com/Reply\" itemid=\"1004\"><strong itemprop=\"mri\" itemid=\"8:bob\">Display Name</strong><span itemprop=\"time\" itemid=\"1780000003000\"></span><p itemprop=\"preview\">Looks great!</p></blockquote><p>Thank you</p>",
+    "properties": {}
+  },
+  "forwarded_attribution": {
+    "id": "1006",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000005000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>FYI:</p><blockquote itemtype=\"http://schema.skype.com/Forward\"><p>Important announcement from partner</p></blockquote>",
+    "properties": {}
+  },
+  "file_attachments": {
+    "id": "1007",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000006000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Attached invoice</p>",
+    "properties": {
+      "files": "[{\"itemid\": \"file-123\", \"fileName\": \"Invoice_202611.pdf\", \"fileType\": \"pdf\"}]"
+    }
+  },
+  "edited_message": {
+    "id": "1008",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000007000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Updated content</p>",
+    "properties": {
+      "edittime": 1780000010000.0
+    },
+    "skypeeditedid": "edit_123"
+  },
+  "skypeeditedid_only_not_edited": {
+    "id": "1009",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000008000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "<p>Normal message despite skypeeditedid</p>",
+    "properties": {},
+    "skypeeditedid": "edit_456"
+  },
+  "deleted_via_deletetime": {
+    "id": "1010",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000009000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "",
+    "properties": {
+      "deletetime": 1780000020000.0
+    }
+  },
+  "deleted_via_deletion_info": {
+    "id": "1011",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000010000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "",
+    "deletionInfo": {
+      "deletedBy": "8:bob"
+    },
+    "properties": {}
+  },
+  "deleted_residue_skypeeditedid_empty": {
+    "id": "1012",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000011000.0,
+    "type": "Message",
+    "messageType": "RichText/Html",
+    "content": "",
+    "skypeeditedid": "edit_789",
+    "properties": {}
+  },
+  "system_event_topic": {
+    "id": "1013",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:alice",
+    "imDisplayName": "Alice Smith",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000012000.0,
+    "type": "Message",
+    "messageType": "ThreadActivity/TopicUpdate",
+    "content": "<topicupdate><eventtime>1780000012000</eventtime><value>New Team Topic</value></topicupdate>",
+    "properties": {}
+  },
+  "system_event_add_member": {
+    "id": "1014",
+    "conversationId": "19:test_conv@thread.v2",
+    "creator": "8:bob",
+    "imDisplayName": "Bob Jones",
+    "isSentByCurrentUser": false,
+    "originalArrivalTime": 1780000013000.0,
+    "type": "Message",
+    "messageType": "ThreadActivity/AddMember",
+    "content": "<addmember><eventtime>1780000013000</eventtime><target>8:carol</target></addmember>",
+    "properties": {}
+  }
+}

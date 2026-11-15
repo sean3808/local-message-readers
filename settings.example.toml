@@ -1,0 +1,35 @@
+# Copy this file to settings.toml (same folder) and fill in your own values.
+# settings.toml is ignored by git; this example is tracked. Every key is optional.
+# Another settings file can be selected with --settings <file> on every entry point:
+#   teams-reader, wechat-reader, python -m readers.backup, scripts/check_commit_blocklist.py
+# Unknown keys or values of the wrong type stop the command with an error naming the file and key.
+
+# Archive SQLite file. Default: %LOCALAPPDATA%\local-message-readers\archive.db (--archive-path wins).
+archive_path = "D:/example/local-message-readers/archive.db"
+
+# Teams personal profile folder (WV2Profile_tfl). Default: the standard Teams location (--profile-dir wins).
+profile_dir = "C:/Users/example/AppData/Local/Packages/MSTeams_8wekyb3d8bbwe/LocalCache/Microsoft/MSTeams/EBWebView/WV2Profile_tfl"
+
+# Folder that receives the encrypted weekly backup; it must already exist (--dest wins). Required for backups.
+backup_dest = "D:/example/backups/local-message-readers"
+
+# Your own Teams user ID, used when the data does not say who sent a message. Optional.
+teams_self_id = "8:example"
+
+# Private commit blocklist (UTF-8, one literal per line). The pre-commit check fails closed without it.
+commit_blocklist = "D:/example/private/commit-blocklist.txt"
+
+# Strings that are public (for example your GitHub handle) and may appear in committed files even though
+# a shorter blocklist entry is contained in them. Each occurrence (any letter case) is masked before the
+# blocklist is matched, in file content and in paths; the same entry elsewhere still matches. Optional.
+commit_blocklist_public = ["example-owner"]
+
+# Real-data smoke tests read your own conversations. Without this table they are skipped.
+[smoke]
+wechat = false
+teams_group_id = "19:example-group@thread.v2"
+teams_second_id = "19:example-one-to-one@unq.gbl.spaces"
+teams_group_name = "Example Group"
+teams_ambiguous_name = "Example Person"
+teams_ambiguous_id_1 = "19:example-person-a@unq.gbl.spaces"
+teams_ambiguous_id_2 = "19:example-person-b@unq.gbl.spaces"

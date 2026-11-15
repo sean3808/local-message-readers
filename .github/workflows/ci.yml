@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Windows only: the readers depend on Windows data locations and DPAPI.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.8"
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      # Real-data smoke tests skip themselves when [smoke] is not configured.
+      - name: Tests
+        run: uv run pytest -q
