@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a new capability or reader
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is read-only and local-first by design (see `docs/adr/`): requests to send
+        messages or upload chat data elsewhere are out of scope. Use fictional data in examples.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The task that currently needs manual copy and paste.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

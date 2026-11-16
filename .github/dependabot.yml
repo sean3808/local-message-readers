@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The WeChat upstream is pinned to a specific commit on purpose (see [tool.uv.sources]);
+  # review any update to it against the smoke tests before merging.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]
+    groups:
+      python:
+        patterns: ["*"]
