@@ -29,12 +29,12 @@ from wechat_cli.core.messages import (
     _query_messages,
     decompress_content,
     format_msg_type,
-    parse_time_range,
     resolve_chat_context,
     validate_pagination,
 )
 
 from readers.settings import configure as configure_settings
+from readers.timeparse import FORMATS_HELP, parse_time_range
 
 TEMP_PREFIX = "wechat-reader-"
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
@@ -243,18 +243,18 @@ def _parser():
     m.add_argument("conversation", help="Display name, remark name or id (such as wxid_xxx, xxx@chatroom)")
     m.add_argument("--limit", type=int, default=50)
     m.add_argument("--offset", type=int, default=0, help="How many messages to skip, counting back from the newest")
-    m.add_argument("--start", default="", help="YYYY-MM-DD [HH:MM[:SS]]")
-    m.add_argument("--end", default="", help="YYYY-MM-DD [HH:MM[:SS]]")
+    m.add_argument("--start", default="", help=FORMATS_HELP)
+    m.add_argument("--end", default="", help=FORMATS_HELP)
 
     s = sub.add_parser("search", help="Search message content by keyword")
     s.add_argument("keyword")
     s.add_argument("--conversation", default="", help="Search only this conversation")
     s.add_argument("--limit", type=int, default=20)
-    s.add_argument("--start", default="")
-    s.add_argument("--end", default="")
+    s.add_argument("--start", default="", help=FORMATS_HELP)
+    s.add_argument("--end", default="", help=FORMATS_HELP)
 
     r = sub.add_parser("recent", help="Messages after a given time across all conversations (oldest to newest)")
-    r.add_argument("--since", required=True, help="YYYY-MM-DD [HH:MM[:SS]], the time last read up to; boundary included, dedupe by (conversation_id, id)")
+    r.add_argument("--since", required=True, help=f"The time last read up to: {FORMATS_HELP}; passing back the last message's `time` is immune to time zone changes. Boundary included, dedupe by (conversation_id, id)")
     r.add_argument("--limit", type=int, default=100)
     return p
 

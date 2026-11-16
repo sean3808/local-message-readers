@@ -63,7 +63,7 @@ uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
 ```
 
-reader 不会记住已经给你看过什么；`recent` 的 `--since` 时间由调用方自己记录。公众号（订阅号、服务号）不会出现在 `conversations`、`search` 和 `recent` 的结果里。
+reader 不会记住已经给你看过什么；`recent` 的 `--since` 时间由调用方自己记录。最稳妥的做法是把上次读到最后一条消息的 `time` 原样传回去：它带着时差，电脑换了时区也仍然指向同一个时刻。没写时差的时间会当作这台电脑的本地时间。公众号（订阅号、服务号）不会出现在 `conversations`、`search` 和 `recent` 的结果里。
 
 ### 3. Teams：第一次同步
 

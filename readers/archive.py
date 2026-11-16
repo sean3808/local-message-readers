@@ -8,7 +8,6 @@ Versioning follows "newest version wins", and an older version never overwrites 
 from __future__ import annotations
 
 import json
-import math
 import os
 import sqlite3
 from contextlib import closing
@@ -17,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from readers.settings import get_path_setting
+from readers.timeparse import parse_time_bound
 
 REPLACEMENT_CHARACTER = "\ufffd"
 
@@ -112,45 +112,6 @@ def _merge_sources(raw: str | None, source: str) -> str:
     if source not in sources:
         sources.append(source)
     return json.dumps(sources)
-
-
-def _parse_time_bound(val: str | float | None, is_end: bool = False) -> float | None:
-    if val is None or val == "":
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip()
-    if not s:
-        return None
-    try:
-        f = float(s)
-        if not (math.isnan(f) or math.isinf(f)):
-            return f
-    except ValueError:
-        pass
-
-    # YYYY-MM-DD
-    if len(s) == 10 and s[4] == "-" and s[7] == "-":
-        s = f"{s} 23:59:59.999999" if is_end else f"{s} 00:00:00"
-
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.astimezone()
-        return dt.timestamp()
-    except ValueError:
-        pass
-
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
-        try:
-            dt = datetime.strptime(s, fmt).astimezone()
-            if is_end and fmt == "%Y-%m-%d %H:%M":
-                dt = dt.replace(second=59, microsecond=999999)
-            return dt.timestamp()
-        except ValueError:
-            pass
-
-    raise ValueError(f"Invalid time format: '{val}'. Supported: YYYY-MM-DD / YYYY-MM-DD HH:MM / YYYY-MM-DD HH:MM:SS or an ISO timestamp")
 
 
 def get_default_data_dir() -> Path:
@@ -1283,8 +1244,8 @@ class Archive:
         query = f"SELECT {select_cols} FROM {table} WHERE channel = ? AND conversation_id = ?"
         params: list[Any] = [channel, conversation_id]
 
-        start_ts = _parse_time_bound(start, is_end=False)
-        end_ts = _parse_time_bound(end, is_end=True)
+        start_ts = parse_time_bound(start, is_end=False)
+        end_ts = parse_time_bound(end, is_end=True)
         if start_ts is not None and end_ts is not None and start_ts > end_ts:
             raise ValueError("start must not be later than end")
 
@@ -1378,8 +1339,8 @@ class Archive:
             query += " AND conversation_id = ?"
             params.append(conversation_id)
 
-        start_ts = _parse_time_bound(start, is_end=False)
-        end_ts = _parse_time_bound(end, is_end=True)
+        start_ts = parse_time_bound(start, is_end=False)
+        end_ts = parse_time_bound(end, is_end=True)
         if start_ts is not None and end_ts is not None and start_ts > end_ts:
             raise ValueError("start must not be later than end")
 
@@ -1426,7 +1387,7 @@ class Archive:
         Determined by original send time; if the total exceeds limit, truncated to the latest `limit` rows,
         and returns (messages oldest to newest, truncated: bool).
         """
-        since_ts = _parse_time_bound(since, is_end=False)
+        since_ts = parse_time_bound(since, is_end=False)
         if since_ts is None:
             raise ValueError(f"Invalid time format: '{since}'")
 

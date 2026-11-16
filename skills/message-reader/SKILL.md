@@ -14,7 +14,7 @@ uv run --project <repo> teams-reader <subcommand> ...
 
 If the location of `<repo>` is not known, ask the user once. Do not guess a path.
 
-Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"`. For installation and the WeChat key see `<repo>/AGENTS.md > Readers`.
+Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"` (machine-local time), or an ISO 8601 time with an offset; for `recent`, pass back the last message's `time` unchanged. For installation and the WeChat key see `<repo>/AGENTS.md > Readers`.
 
 ## Steps
 

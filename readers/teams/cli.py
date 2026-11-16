@@ -20,6 +20,7 @@ from readers.teams.export import import_export
 from readers.teams.reconcile import reconcile_export
 from readers.teams.repair import repair_fffd
 from readers.teams.system_text import migrate_system_text
+from readers.timeparse import FORMATS_HELP
 from readers.teams.snapshot import (
     get_tfl_profile_dir,
     ingest_cache,
@@ -103,8 +104,8 @@ def _parser() -> argparse.ArgumentParser:
     m.add_argument("conversation", help="Display name or id")
     m.add_argument("--limit", type=int, default=50, help="Maximum number of results (default 50)")
     m.add_argument("--offset", type=int, default=0, help="Number of results to skip (default 0)")
-    m.add_argument("--start", default="", help="Start time (YYYY-MM-DD [HH:MM[:SS]])")
-    m.add_argument("--end", default="", help="End time (YYYY-MM-DD [HH:MM[:SS]])")
+    m.add_argument("--start", default="", help=f"Start time: {FORMATS_HELP}")
+    m.add_argument("--end", default="", help=f"End time: {FORMATS_HELP}")
 
     s = sub.add_parser(
         "search",
@@ -114,15 +115,15 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("keyword", help="Search keyword")
     s.add_argument("--conversation", default="", help="Search only this conversation (display name or id)")
     s.add_argument("--limit", type=int, default=20, help="Maximum number of results (default 20)")
-    s.add_argument("--start", default="", help="Start time (YYYY-MM-DD [HH:MM[:SS]])")
-    s.add_argument("--end", default="", help="End time (YYYY-MM-DD [HH:MM[:SS]])")
+    s.add_argument("--start", default="", help=f"Start time: {FORMATS_HELP}")
+    s.add_argument("--end", default="", help=f"End time: {FORMATS_HELP}")
 
     r = sub.add_parser(
         "recent",
         parents=[sub_common],
         help="Messages from all conversations after a given time (oldest first)",
     )
-    r.add_argument("--since", required=True, help="YYYY-MM-DD [HH:MM[:SS]], the time you last read up to; inclusive")
+    r.add_argument("--since", required=True, help=f"The time you last read up to: {FORMATS_HELP}; passing back the last message's `time` is immune to time zone changes. Inclusive")
     r.add_argument("--limit", type=int, default=100, help="Maximum number of results (default 100)")
 
     d = sub.add_parser("download", parents=[sub_common], help="Download a message's attachments")
