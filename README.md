@@ -63,7 +63,7 @@ uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
 ```
 
-The reader does not remember what it has already shown you; whoever calls `recent` keeps the `--since` time.
+The reader does not remember what it has already shown you; whoever calls `recent` keeps the `--since` time. Official accounts (subscription and service accounts) are left out of `conversations`, `search` and `recent`.
 
 ### 3. Teams: first sync
 

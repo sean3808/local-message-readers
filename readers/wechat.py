@@ -40,6 +40,15 @@ TEMP_PREFIX = "wechat-reader-"
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 
 
+# Official accounts (subscription / service accounts) are out of scope: their ids start with gh_, and WeChat folds
+# them into placeholder sessions that have no message table of their own
+_OFFICIAL_ACCOUNT_PLACEHOLDERS = frozenset({"brandsessionholder", "brandservicesessionholder"})
+
+
+def is_official_account(username):
+    return username.startswith("gh_") or username in _OFFICIAL_ACCOUNT_PLACEHOLDERS
+
+
 def _iso(ts):
     return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
 
@@ -151,8 +160,9 @@ def list_conversations(app, limit):
         rows = conn.execute("""
             SELECT username, unread_count, summary, last_timestamp, last_msg_type, last_msg_sender
             FROM SessionTable WHERE last_timestamp > 0
-            ORDER BY last_timestamp DESC LIMIT ?
-        """, (limit,)).fetchall()
+            ORDER BY last_timestamp DESC
+        """).fetchall()
+    rows = [r for r in rows if not is_official_account(r[0])][:limit]
     result = []
     for username, unread, summary, ts, msg_type, sender in rows:
         if isinstance(summary, bytes):
@@ -202,7 +212,8 @@ def search(app, keyword, conversation, limit, start, end):
             try:
                 with closing(sqlite3.connect(path)) as conn:
                     # For a table that cannot be mapped to a conversation id, the results cannot be attributed; skip it
-                    contexts.extend(c for c in _load_search_contexts_from_db(conn, path, names) if c["username"])
+                    contexts.extend(c for c in _load_search_contexts_from_db(conn, path, names)
+                                    if c["username"] and not is_official_account(c["username"]))
             except Exception as e:  # noqa: BLE001
                 failures.append(f"{rel_key}: {e}")
     messages, collect_failures = _collect(app, contexts, limit, 0, start_ts, end_ts, keyword=keyword)

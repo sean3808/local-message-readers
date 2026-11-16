@@ -63,7 +63,7 @@ uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
 ```
 
-reader 不會記得已經給你看過什麼；`recent` 的 `--since` 時間由呼叫的人自己記。
+reader 不會記得已經給你看過什麼；`recent` 的 `--since` 時間由呼叫的人自己記。公眾號（訂閱號、服務號）不會出現在 `conversations`、`search` 與 `recent` 的結果裡。
 
 ### 3. Teams：第一次同步
 
