@@ -274,6 +274,7 @@ def backup_status(failures: list[str]) -> dict[str, Any]:
 
 
 DEFAULT_REFRESH_MIN_INTERVAL_SECONDS = 120
+_CACHE_ATTEMPT_SOURCE = "cache_attempt"
 
 
 def _now() -> datetime:
@@ -287,7 +288,7 @@ def _throttle_reason(archive: Archive) -> str | None:
         interval = DEFAULT_REFRESH_MIN_INTERVAL_SECONDS
     if interval <= 0:
         return None
-    if archive.get_sync_status("teams", source="cache_attempt") == "failed":
+    if archive.get_sync_status("teams", source=_CACHE_ATTEMPT_SOURCE) == "failed":
         return None
     last_ok = archive.get_data_current_up_to("teams")
     if last_ok is None:
@@ -365,17 +366,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         refresh_status = "failed"
         refresh_error = f"Teams personal profile not found ({profile_dir})"
         failures.append(refresh_error)
-        archive.record_sync(channel="teams", source="cache_attempt", status="failed")
+        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
     else:
         outcome = ingest_cache(archive, profile_dir)
         failures.extend(outcome.failures)
         if outcome.success:
             refresh_status = "ok"
-            archive.record_sync(channel="teams", source="cache_attempt", status="ok")
+            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="ok")
         else:
             refresh_status = "failed"
             refresh_error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
-            archive.record_sync(channel="teams", source="cache_attempt", status="failed")
+            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
 
     current_up_to = archive.get_data_current_up_to("teams")
     refresh_outcome: dict[str, Any] = {

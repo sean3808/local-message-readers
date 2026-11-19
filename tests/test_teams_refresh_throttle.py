@@ -40,6 +40,18 @@ def _run_main(
     return code, json.loads(out)
 
 
+def _seed_sync_and_settings(
+    tmp_path: Path, interval: int, sync_time: datetime
+) -> tuple[Path, Path, Path]:
+    arc_path = tmp_path / "arc.db"
+    profile = _profile(tmp_path)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(f"refresh_min_interval_seconds = {interval}\n", encoding="utf-8")
+    arc = Archive(db_path=arc_path)
+    arc.record_sync("teams", source="cache", status="ok", sync_time=sync_time.isoformat(timespec="seconds"))
+    return arc_path, profile, settings
+
+
 def test_second_query_within_interval_skips_without_reading_cache(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -89,14 +101,8 @@ def test_second_query_within_interval_skips_without_reading_cache(
 def test_query_after_interval_refreshes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    arc_path = tmp_path / "arc.db"
-    profile = _profile(tmp_path)
-    settings = tmp_path / "settings.toml"
-    settings.write_text("refresh_min_interval_seconds = 120\n", encoding="utf-8")
-
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
-    arc = Archive(db_path=arc_path)
-    arc.record_sync("teams", source="cache", status="ok", sync_time=t0.isoformat(timespec="seconds"))
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
 
     with (
         patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(with_replychains=True)),
@@ -117,14 +123,8 @@ def test_query_after_interval_refreshes(
 def test_zero_interval_always_refreshes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    arc_path = tmp_path / "arc.db"
-    profile = _profile(tmp_path)
-    settings = tmp_path / "settings.toml"
-    settings.write_text("refresh_min_interval_seconds = 0\n", encoding="utf-8")
-
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
-    arc = Archive(db_path=arc_path)
-    arc.record_sync("teams", source="cache", status="ok", sync_time=t0.isoformat(timespec="seconds"))
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 0, t0)
 
     with (
         patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(with_replychains=True)),
@@ -146,14 +146,8 @@ def test_zero_interval_always_refreshes(
 def test_refresh_flag_forces_refresh_within_interval(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], flag_position: str
 ) -> None:
-    arc_path = tmp_path / "arc.db"
-    profile = _profile(tmp_path)
-    settings = tmp_path / "settings.toml"
-    settings.write_text("refresh_min_interval_seconds = 120\n", encoding="utf-8")
-
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
-    arc = Archive(db_path=arc_path)
-    arc.record_sync("teams", source="cache", status="ok", sync_time=t0.isoformat(timespec="seconds"))
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
 
     argv = ("--refresh", "conversations") if flag_position == "before" else ("conversations", "--refresh")
     with (
@@ -220,15 +214,9 @@ def test_refresh_and_no_refresh_together_is_usage_error(
 def test_failed_refresh_does_not_suppress_next_query_within_interval(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    arc_path = tmp_path / "arc.db"
-    profile = _profile(tmp_path)
-    settings = tmp_path / "settings.toml"
-    settings.write_text("refresh_min_interval_seconds = 120\n", encoding="utf-8")
-
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
     earlier_ok = t0.isoformat(timespec="seconds")
-    arc = Archive(db_path=arc_path)
-    arc.record_sync("teams", source="cache", status="ok", sync_time=earlier_ok)
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
 
     # First query forces a refresh that fails (missing replychains)
     with (
