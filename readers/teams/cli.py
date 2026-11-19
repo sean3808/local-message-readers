@@ -21,7 +21,7 @@ from readers.teams.export import import_export
 from readers.teams.reconcile import reconcile_export
 from readers.teams.repair import repair_fffd
 from readers.teams.system_text import migrate_system_text
-from readers.timeparse import FORMATS_HELP
+from readers.timeparse import FORMATS_HELP, parse_time_bound
 from readers.teams.snapshot import (
     get_tfl_profile_dir,
     ingest_cache,
@@ -35,14 +35,9 @@ def _last_time_sort_key(conv: dict[str, Any]) -> tuple[int, Any]:
     if not raw:
         return (0, "")
     try:
-        dt = datetime.fromisoformat(raw)
+        return (2, parse_time_bound(raw))
     except ValueError:
         return (1, raw)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    else:
-        dt = dt.astimezone(UTC)
-    return (2, dt)
 
 
 def resolve_conversation_with_alternatives(
@@ -68,14 +63,13 @@ def resolve_conversation_with_alternatives(
         return convs[0], []
 
     if all(not c["is_group"] for c in convs):
-        keys = [_last_time_sort_key(c) for c in convs]
-        if len(set(keys)) == len(keys):
-            ranked = sorted(convs, key=_last_time_sort_key, reverse=True)
+        keyed = sorted(((_last_time_sort_key(c), c) for c in convs), key=lambda kc: kc[0], reverse=True)
+        if len({k for k, _ in keyed}) == len(keyed):
             alternatives = [
                 {"id": c["id"], "last_time": c.get("last_time") or None}
-                for c in ranked[1:]
+                for _, c in keyed[1:]
             ]
-            return ranked[0], alternatives
+            return keyed[0][1], alternatives
 
     # Multiple candidates: report an ambiguity error
     details = [
@@ -294,12 +288,10 @@ def _throttle_reason(archive: Archive) -> str | None:
     if last_ok is None:
         return None
     try:
-        parsed = datetime.fromisoformat(last_ok)
+        last_ok_ts = parse_time_bound(last_ok)
     except ValueError:
         return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    elapsed = (_now() - parsed).total_seconds()
+    elapsed = _now().timestamp() - last_ok_ts
     if 0 <= elapsed < interval:
         return f"Last successful refresh was {int(elapsed)}s ago (within {interval}s interval)"
     return None
@@ -366,24 +358,23 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         refresh_status = "failed"
         refresh_error = f"Teams personal profile not found ({profile_dir})"
         failures.append(refresh_error)
-        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
     else:
         outcome = ingest_cache(archive, profile_dir)
         failures.extend(outcome.failures)
         if outcome.success:
             refresh_status = "ok"
-            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="ok")
         else:
             refresh_status = "failed"
             refresh_error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
-            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
+    if refresh_status != "skipped":
+        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status=refresh_status)
 
     current_up_to = archive.get_data_current_up_to("teams")
     refresh_outcome: dict[str, Any] = {
         "status": refresh_status,
         "current_up_to": current_up_to,
     }
-    if refresh_status == "skipped" and refresh_reason is not None:
+    if refresh_reason:
         refresh_outcome["reason"] = refresh_reason
     if current_up_to is None:
         refresh_outcome["current_up_to_reason"] = "The Teams cache has never been synced successfully; data currency is unknown"
