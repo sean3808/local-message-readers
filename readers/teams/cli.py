@@ -29,15 +29,35 @@ from readers.teams.snapshot import (
 )
 
 
-def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, Any]:
-    """Resolve the conversation argument (by id or display name).
+def _last_time_sort_key(conv: dict[str, Any]) -> tuple[int, Any]:
+    """Sort key for conversation last_time: unknown sorts oldest; equal instants tie."""
+    raw = conv.get("last_time")
+    if not raw:
+        return (0, "")
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return (1, raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    else:
+        dt = dt.astimezone(UTC)
+    return (2, dt)
 
-    If the name matches several candidates, raises an ambiguity error with distinguishing details; raises a not-found error if nothing matches.
+
+def resolve_conversation_with_alternatives(
+    archive: Archive, conversation_arg: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Resolve the conversation argument (by id or display name) and return (chosen, alternatives).
+
+    When multiple non-group conversations share the display name with distinct last_time values,
+    resolves to the newest and returns the remaining candidates newest-first.
+    Raises an ambiguity error if any candidate is a group or any candidates tie on last_time.
     """
     # 1. Exact id match first
     conv = archive.get_conversation("teams", conversation_arg)
     if conv:
-        return conv
+        return conv, []
 
     # 2. Match by name
     convs = archive.find_conversations_by_name("teams", conversation_arg)
@@ -45,7 +65,17 @@ def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, A
         raise ValueError(f"Conversation not found: '{conversation_arg}'")
 
     if len(convs) == 1:
-        return convs[0]
+        return convs[0], []
+
+    if all(not c["is_group"] for c in convs):
+        keys = [_last_time_sort_key(c) for c in convs]
+        if len(set(keys)) == len(keys):
+            ranked = sorted(convs, key=_last_time_sort_key, reverse=True)
+            alternatives = [
+                {"id": c["id"], "last_time": c.get("last_time") or None}
+                for c in ranked[1:]
+            ]
+            return ranked[0], alternatives
 
     # Multiple candidates: report an ambiguity error
     details = [
@@ -56,15 +86,25 @@ def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, A
     raise ValueError(msg)
 
 
+def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, Any]:
+    """Resolve the conversation argument (by id or display name).
+
+    If the name matches several candidates that cannot be disambiguated, raises an ambiguity error
+    with distinguishing details; raises a not-found error if nothing matches.
+    """
+    conv, _ = resolve_conversation_with_alternatives(archive, conversation_arg)
+    return conv
+
+
 def resolve_conversation_for_query(
     archive: Archive,
     conv_arg: str,
     refresh_status: str,
     refresh_error: str | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Resolve the conversation argument; if the cache refresh failed and resolution fails, wrap it as an explicit source error."""
     try:
-        return resolve_conversation(archive, conv_arg)
+        return resolve_conversation_with_alternatives(archive, conv_arg)
     except Exception as e:
         if refresh_status == "failed":
             raise RuntimeError(f"Teams cache source error: {refresh_error}; also could not resolve conversation: {e}") from e
@@ -313,10 +353,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     backup_outcome = backup_status(failures)
 
     if args.cmd == "download":
-        conv_id = (resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)['id']
-                   if args.conversation else None)
+        alternatives: list[dict[str, Any]] = []
+        conv_id = None
+        if args.conversation:
+            conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+            conv_id = conv["id"]
         result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
         result.update(refresh=refresh_outcome, backup=backup_outcome, failures=failures)
+        if alternatives:
+            result["alternatives"] = alternatives
         return result
 
     if args.cmd == "conversations":
@@ -329,7 +374,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         }
 
     if args.cmd == "messages":
-        conv = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+        conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
         msgs = archive.query_messages(
             channel="teams",
             conversation_id=conv["id"],
@@ -338,7 +383,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             start=args.start,
             end=args.end,
         )
-        return {
+        out: dict[str, Any] = {
             "conversation": {
                 "id": conv["id"],
                 "name": conv["name"],
@@ -349,11 +394,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "backup": backup_outcome,
             "failures": failures,
         }
+        if alternatives:
+            out["alternatives"] = alternatives
+        return out
 
     if args.cmd == "search":
         conv_id = None
+        alternatives = []
         if args.conversation:
-            conv = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+            conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
             conv_id = conv["id"]
 
         msgs = archive.search_messages(
@@ -370,13 +419,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             fmt["hit_in_quote"] = m["hit_in_quote"]
             out_messages.append(fmt)
 
-        return {
+        out = {
             "keyword": args.keyword,
             "messages": out_messages,
             "refresh": refresh_outcome,
             "backup": backup_outcome,
             "failures": failures,
         }
+        if alternatives:
+            out["alternatives"] = alternatives
+        return out
 
     if args.cmd == "recent":
         msgs, truncated = archive.query_recent_messages(
