@@ -1,7 +1,8 @@
 name: Release
 
-# Pushing a version tag (for example v0.2.0) runs the tests and opens a draft release
-# with auto-generated notes; the maintainer reviews the draft and publishes it by hand.
+# Pushing a version tag (for example v0.2.0) runs the tests and publishes a release
+# with auto-generated notes. Tags are pushed by scripts/release.ps1, which first waits
+# for CI on the tagged commit and reinstalls the global tool from it.
 on:
   push:
     tags: ["v*"]
@@ -37,17 +38,17 @@ jobs:
       - name: Tests
         run: uv run pytest -q
 
-  draft-release:
+  release:
     needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Create a draft release with generated notes
+      - name: Create the release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "${{ github.ref_name }}"
           --repo "${{ github.repository }}"
-          --draft --verify-tag --generate-notes
+          --verify-tag --generate-notes
           --title "${{ github.ref_name }}"

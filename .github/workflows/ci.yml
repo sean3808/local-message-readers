@@ -1,7 +1,11 @@
 name: CI
 
+# Runs on every push to main and every non-draft pull request. A clean checkout
+# with no local .venv or settings proves the commit is complete. scripts/release.ps1
+# waits for this workflow to pass on the commit it is about to release.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -9,8 +13,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # Windows only: the readers depend on Windows data locations and DPAPI.
     runs-on: windows-latest
     timeout-minutes: 20
@@ -30,3 +39,28 @@ jobs:
       # Real-data smoke tests skip themselves when [smoke] is not configured.
       - name: Tests
         run: uv run pytest -q
+
+  package:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.8"
+
+      # Installs the commit as a non-editable tool, the way other projects use it
+      # (ADR-0011), so a release can never ship a snapshot that does not install.
+      - name: Install as a tool
+        run: uv tool install .
+
+      - name: Console scripts start
+        shell: pwsh
+        run: |
+          $bin = (uv tool dir --bin).Trim()
+          foreach ($name in 'teams-reader', 'wechat-reader') {
+            & (Join-Path $bin "$name.exe") --help | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "$name --help exited with $LASTEXITCODE" }
+          }
