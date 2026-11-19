@@ -42,6 +42,7 @@ All commands below are typed into PowerShell (open the Start menu, type `PowerSh
    ```
 
 4. Check that it works: `uv run wechat-reader --help` and `uv run teams-reader --help` should each print a usage text.
+5. Install the readers as commands that work from any folder: `uv tool install <repo>`. Then `wechat-reader --help` and `teams-reader --help` work anywhere. After you update the code, run `uv tool install --reinstall <repo>` so the commands pick up the change.
 
 Optional: copy `settings.example.toml` to `%LOCALAPPDATA%\local-message-readers\settings.toml` and fill in only the values you need (if you already have a `settings.toml` in `<repo>`, move it there; the copy in `<repo>` is no longer read). Every key is optional, and the file explains each key. A misspelled key stops the command with an error that names the key. Every command also accepts `--settings <file>` to read another file.
 
@@ -132,7 +133,7 @@ The skill in `skills/message-reader/` teaches an agent to query WeChat and Teams
 
 - **Other agents:** point the agent at `skills/message-reader/SKILL.md`, or paste it into the agent's instructions.
 
-From any other folder, the agent runs the readers as `uv run --project <repo> wechat-reader ...` and `uv run --project <repo> teams-reader ...`, so tell it where `<repo>` is. Query output is written to `<repo>/fixtures/local/`, which git ignores. `AGENTS.md` describes every command and option in full.
+From any other folder, the agent runs the installed commands `wechat-reader ...` and `teams-reader ...` (step 1.5). Tell it where `<repo>` is anyway. Query output is written to `<repo>/fixtures/local/`, which git ignores. `AGENTS.md` describes every command and option in full.
 
 ## Privacy
 

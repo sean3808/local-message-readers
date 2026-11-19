@@ -5,12 +5,14 @@ description: Query local WeChat or Teams chat history on this computer: list con
 
 Read-only; there is no send function. Query the channel the user names; if none is named, query both and label the reply by channel. The two readers do not share one output schema; their differences are described in the channel sections below.
 
-`<repo>` is the folder where the user cloned the local-message-readers repository. From any directory, call the readers with `uv run --project <repo>`. The query subcommands are `conversations | messages | search | recent`; parameters are defined by `<subcommand> --help`:
+`<repo>` is the folder where the user cloned the local-message-readers repository. From any directory, call the readers by their installed names. The query subcommands are `conversations | messages | search | recent`; parameters are defined by `<subcommand> --help`:
 
 ```text
-uv run --project <repo> wechat-reader <subcommand> ...
-uv run --project <repo> teams-reader <subcommand> ...
+wechat-reader <subcommand> ...
+teams-reader <subcommand> ...
 ```
+
+When the shell reports the name as not found, run `uv run --project <repo> <reader> <subcommand> ...` instead and tell the user the installed readers are missing (`<repo>/AGENTS.md > Readers`).
 
 If the location of `<repo>` is not known, ask the user once. Do not guess a path.
 
@@ -62,7 +64,7 @@ Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"` (ma
 
 - For forwards and quotes look at `quoted`, which holds the original author and original time; do not attribute the original author's words to the user. A `hit_in_quote` of true in `search` means the keyword appears only inside the quoted content.
 - `edited` true = the text is the current edited version (the pre-edit content is not kept); a message with `deleted` true is not cited as a normal message.
-- Attachments: `files` holds only file names; `attachments` holds `name` and `url` (may be null). Download with `uv run --project <repo> teams-reader download <message-id> --to <folder>`; add `--name <file name>` to filter. The first-sign-in instructions are shown on stderr. Check each attachment's status in the JSON; only when the download returns an error, open `attachments[].url` in the Chrome the user is signed in to. An image appears in `text` only as a short placeholder.
+- Attachments: `files` holds only file names; `attachments` holds `name` and `url` (may be null). Download with `teams-reader download <message-id> --to <folder>`; add `--name <file name>` to filter. The first-sign-in instructions are shown on stderr. Check each attachment's status in the JSON; only when the download returns an error, open `attachments[].url` in the Chrome the user is signed in to. An image appears in `text` only as a short placeholder.
 
 **Coverage**: the Teams cache keeps only a recent window per conversation, and older messages enter the archive only after the reader has read them; messages purged during a long period when the reader did not run are missed, and the remedy is importing the official export (see the maintenance commands below). Only the personal account is read; messages of a company work account cannot be read.
 

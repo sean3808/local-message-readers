@@ -42,6 +42,7 @@ Teams 的快取只保留最近一段時間的訊息，所以 `teams-reader` 另�
    ```
 
 4. 確認可以執行：`uv run wechat-reader --help` 與 `uv run teams-reader --help` 都應該印出使用說明。
+5. 把 reader 安裝成任何資料夾都能執行的指令：`uv tool install <repo>`。之後 `wechat-reader --help` 與 `teams-reader --help` 在哪裡都能執行。更新程式碼後，執行 `uv tool install --reinstall <repo>`，指令才會用到新版。
 
 選用：把 `<repo>` 裡的 `settings.example.toml` 複製成 `%LOCALAPPDATA%\local-message-readers\settings.toml`，只填你需要的值（如果你原本在 `<repo>` 放了 `settings.toml`，請把它搬過去；`<repo>` 裡的複本不會再被讀取）。每個欄位都是選填，檔內有各欄位的說明。欄位名稱拼錯會讓指令停下並指出是哪個欄位。每個指令也接受 `--settings <檔案>` 改讀別的設定檔。
 
@@ -132,7 +133,7 @@ Teams 會清掉舊的快取，所以封存值得備份。每週的排程會更�
 
 - **其他 agent：** 讓 agent 讀 `skills/message-reader/SKILL.md`，或把內容貼進 agent 的指示裡。
 
-從任何其他資料夾，agent 都用 `uv run --project <repo> wechat-reader ...` 與 `uv run --project <repo> teams-reader ...` 執行 reader，所以要告訴它 `<repo>` 在哪裡。查詢輸出會寫進 `<repo>/fixtures/local/`，git 會忽略這個資料夾。每個指令與參數的完整說明在 `AGENTS.md`。
+從任何其他資料夾，agent 都用已安裝的指令 `wechat-reader ...` 與 `teams-reader ...` 執行 reader（步驟 1 的第 5 項）。仍要告訴它 `<repo>` 在哪裡。查詢輸出會寫進 `<repo>/fixtures/local/`，git 會忽略這個資料夾。每個指令與參數的完整說明在 `AGENTS.md`。
 
 ## 隱私
 

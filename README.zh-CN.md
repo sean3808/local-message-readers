@@ -42,6 +42,7 @@ Teams 的缓存只保留最近一段时间的消息，所以 `teams-reader` 还�
    ```
 
 4. 确认可以运行：`uv run wechat-reader --help` 和 `uv run teams-reader --help` 都应该打印出使用说明。
+5. 把 reader 安装成任何文件夹都能运行的命令：`uv tool install <repo>`。之后 `wechat-reader --help` 和 `teams-reader --help` 在哪里都能运行。更新代码后，运行 `uv tool install --reinstall <repo>`，命令才会用到新版。
 
 可选：把 `<repo>` 里的 `settings.example.toml` 复制为 `%LOCALAPPDATA%\local-message-readers\settings.toml`，只填你需要的值（如果你原本在 `<repo>` 放了 `settings.toml`，请把它移过去；`<repo>` 里的副本不会再被读取）。每个字段都是可选的，文件里有各字段的说明。字段名拼错会让命令停下并指出是哪个字段。每个命令也支持 `--settings <文件>` 改读其他设置文件。
 
@@ -132,7 +133,7 @@ Teams 会清理旧缓存，所以归档值得备份。每周的计划任务会�
 
 - **其他 agent：** 让 agent 读取 `skills/message-reader/SKILL.md`，或把内容粘贴进 agent 的指令里。
 
-在任何其他文件夹里，agent 都用 `uv run --project <repo> wechat-reader ...` 和 `uv run --project <repo> teams-reader ...` 运行 reader，所以要告诉它 `<repo>` 在哪里。查询输出会写进 `<repo>/fixtures/local/`，git 会忽略这个文件夹。每个命令和参数的完整说明在 `AGENTS.md`。
+在任何其他文件夹里，agent 都用已安装的命令 `wechat-reader ...` 和 `teams-reader ...` 运行 reader（第 1 步的第 5 项）。仍要告诉它 `<repo>` 在哪里。查询输出会写进 `<repo>/fixtures/local/`，git 会忽略这个文件夹。每个命令和参数的完整说明在 `AGENTS.md`。
 
 ## 隐私
 

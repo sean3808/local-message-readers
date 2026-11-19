@@ -1,6 +1,6 @@
 # message-reader maintenance commands
 
-Ordinary queries do not need this. Call the readers as in SKILL.md: `uv run --project <repo> <reader> <subcommand> ...`, where `<repo>` is the folder where the repository was cloned; parameters are defined by `--help`, and all output is JSON.
+Ordinary queries do not need this. Call the readers as in SKILL.md (`<reader> <subcommand> ...`); `<repo>` is the folder where the repository was cloned, parameters are defined by `--help`, and all output is JSON.
 
 ## Teams: import the official export
 
