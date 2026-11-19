@@ -14,6 +14,7 @@ from typing import Any
 
 from readers.archive import Archive, get_default_archive_path
 from readers.backup import get_default_log_path
+from readers.settings import SETTINGS_HELP
 from readers.settings import configure as configure_settings
 from readers.teams.download import download_message
 from readers.teams.export import import_export
@@ -76,7 +77,7 @@ def _parser() -> argparse.ArgumentParser:
     sub_common.add_argument("--archive-path", default=argparse.SUPPRESS, help="Path of the archive SQLite file")
     sub_common.add_argument("--no-refresh", action="store_true", default=argparse.SUPPRESS, help="Skip the cache refresh and query the existing archive directly")
     sub_common.add_argument("--profile-dir", default=argparse.SUPPRESS, help="Teams personal profile path (takes precedence over the settings file)")
-    sub_common.add_argument("--settings", default=argparse.SUPPRESS, help="Settings file path (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)")
+    sub_common.add_argument("--settings", default=argparse.SUPPRESS, help=SETTINGS_HELP)
 
     p = argparse.ArgumentParser(
         prog="teams-reader",
@@ -85,7 +86,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--archive-path", default=None, help="Path of the archive SQLite file")
     p.add_argument("--no-refresh", action="store_true", default=False, help="Skip the cache refresh and query the existing archive directly")
     p.add_argument("--profile-dir", default=None, help="Teams personal profile path (takes precedence over the settings file)")
-    p.add_argument("--settings", default=None, help="Settings file path (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)")
+    p.add_argument("--settings", default=None, help=SETTINGS_HELP)
 
     sub = p.add_subparsers(dest="cmd", required=True)
 

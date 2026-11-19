@@ -14,6 +14,7 @@ DEFAULT_SETTINGS_PATH = (
     / "local-message-readers"
     / "settings.toml"
 )
+SETTINGS_HELP = "Settings file path (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)"
 _SCHEMA = {
     "archive_path": str,
     "profile_dir": str,

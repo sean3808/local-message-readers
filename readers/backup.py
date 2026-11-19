@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from readers.archive import get_default_archive_path
-from readers.settings import active_settings_path, get_path_setting, load_settings
+from readers.settings import SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
 from readers.settings import configure as configure_settings
 
 __all__ = [
@@ -643,7 +643,7 @@ def main(argv: list[str] | None = None) -> None:
         "--settings",
         type=Path,
         default=None,
-        help="Settings file (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)",
+        help=SETTINGS_HELP,
     )
 
     args = parser.parse_args(argv)

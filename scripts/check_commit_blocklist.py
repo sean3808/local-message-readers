@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from readers.settings import SettingsError, configure, get_path_setting, get_setting
+from readers.settings import SETTINGS_HELP, SettingsError, configure, get_path_setting, get_setting
 
 
 def git(*args):
@@ -87,7 +87,7 @@ def scan_files(entries, files, public=()):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", action="store_true", help="scan all tracked files at HEAD")
-    parser.add_argument("--settings", default=None, help="settings file (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)")
+    parser.add_argument("--settings", default=None, help=SETTINGS_HELP)
     args = parser.parse_args(argv)
     try:
         configure(args.settings)
