@@ -62,7 +62,8 @@ def resolve_conversation_with_alternatives(
     if len(convs) == 1:
         return convs[0], []
 
-    if all(not c["is_group"] for c in convs):
+    # Only same-name 1:1 chats auto-resolve; a candidate found through an old alias has a different name
+    if all(not c["is_group"] and c["name"] == conversation_arg for c in convs):
         keyed = sorted(((_last_time_sort_key(c), c) for c in convs), key=lambda kc: kc[0], reverse=True)
         if len({k for k, _ in keyed}) == len(keyed):
             alternatives = [
@@ -359,6 +360,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         refresh_error = f"Teams personal profile not found ({profile_dir})"
         failures.append(refresh_error)
     else:
+        # Mark the attempt failed first, so an exception inside ingest_cache never leaves a stale "ok"
+        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
         outcome = ingest_cache(archive, profile_dir)
         failures.extend(outcome.failures)
         if outcome.success:
@@ -393,9 +396,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         if args.conversation:
             conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
             conv_id = conv["id"]
-        result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
+        try:
+            result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
+        except Exception as e:  # noqa: BLE001
+            if not alternatives:
+                raise
+            # The newest conversation may not hold the message: keep the candidates so the caller can retry by id
+            result = {"error": str(e)}
         result.update(refresh=refresh_outcome, backup=backup_outcome, failures=failures)
-        if alternatives and "error" not in result:
+        if alternatives:
             result["alternatives"] = alternatives
         return result
 

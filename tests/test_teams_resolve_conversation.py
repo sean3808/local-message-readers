@@ -80,6 +80,49 @@ def test_messages_resolves_multiple_non_group_to_latest(tmp_path: Path) -> None:
     ]
 
 
+def test_alias_match_with_other_current_name_stays_ambiguous(tmp_path: Path) -> None:
+    """A conversation found only through an old alias name may be another person: never auto-pick it."""
+    arc = tmp_path / "a.db"
+    _seed_convs(
+        arc,
+        [
+            _alice_pair()[0],
+            {
+                "id": "19:example-bob@thread.v2",
+                "name": "Bob Example",
+                "is_group": False,
+                "unread": False,
+                "last_time": "2026-11-19T13:22:12+08:00",
+                "last_timestamp": 1795065732.0,
+                "version": 200.0,
+            },
+        ],
+    )
+    Archive(db_path=arc).add_conversation_alias(
+        "teams", "19:example-bob-old@thread.v2", "19:example-bob@thread.v2", alias_name="Alice Example"
+    )
+
+    code, out = run_cli("messages", "Alice Example", "--no-refresh", archive_path=arc)
+    assert code != 0
+    assert "matches multiple conversations" in out["error"]
+
+
+def test_download_error_keeps_alternatives(tmp_path: Path) -> None:
+    """When the newest same-name chat does not hold the message, the caller still gets the candidates to retry by id."""
+    arc = tmp_path / "a.db"
+    _seed_convs(arc, _alice_pair())
+
+    code, out = run_cli(
+        "download", "m-missing", "--to", str(tmp_path), "--conversation", "Alice Example", "--no-refresh",
+        archive_path=arc,
+    )
+    assert code != 0
+    assert "Message not found" in out["error"]
+    assert out["alternatives"] == [
+        {"id": "19:example-old@thread.v2", "last_time": "2026-07-14T11:01:40+08:00"}
+    ]
+
+
 def test_messages_group_and_non_group_still_ambiguous(tmp_path: Path) -> None:
     arc = tmp_path / "a.db"
     _seed_convs(

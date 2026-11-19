@@ -76,7 +76,7 @@ uv run teams-reader conversations
 
 Look at `refresh.status` and `refresh.current_up_to` in the JSON: they say whether the sync worked and how far the data reaches. When a query runs within `refresh_min_interval_seconds` (default `120`, configured in `%LOCALAPPDATA%\local-message-readers\settings.toml`; `0` disables throttling) of the last successful refresh, the refresh is skipped (`refresh.status` is `"skipped"` with `refresh.reason`). Pass `--refresh` to force a refresh, or `--no-refresh` to always skip (passing both together is an error). If you have the official Teams export for older history, add it with `uv run teams-reader import-export <export file>` (take a backup first, see step 5). Querying never changes the unread state in Teams. If you also open a conversation in Teams itself, Teams marks it as read.
 
-If the profile folder is not in the standard place, set `profile_dir` in `settings.toml` or pass `--profile-dir`.
+If the profile folder is not in the standard place, set `profile_dir` in `%LOCALAPPDATA%\local-message-readers\settings.toml` or pass `--profile-dir`.
 
 When looking up a conversation by display name, if multiple 1:1 conversations share that name with distinct `last_time` values, `teams-reader` picks the newest one and lists the others under `alternatives` (`[{id, last_time}]`); if any candidate is a group or two tie on `last_time`, it returns an error listing each `id` so you can pick one.
 
@@ -109,7 +109,7 @@ Teams purges old cache, so the archive is worth backing up. The weekly job refre
    ```
 
    Use only English letters, digits and keyboard symbols; no double quote `"`, no non-English characters, and do not end it with a backslash. Write the password down in your password manager: restoring on a new computer needs it.
-4. **A destination folder** that already exists (for example a folder inside OneDrive). Set `backup_dest` in `settings.toml`, or pass `--dest`.
+4. **A destination folder** that already exists (for example a folder inside OneDrive). Set `backup_dest` in `%LOCALAPPDATA%\local-message-readers\settings.toml`, or pass `--dest`.
 5. **The schedule**, registered once from the main project folder:
 
    ```powershell

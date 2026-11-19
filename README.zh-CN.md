@@ -76,7 +76,7 @@ uv run teams-reader conversations
 
 看输出 JSON 里的 `refresh.status` 和 `refresh.current_up_to`：它们会告诉你同步是否成功、数据新到什么时候。若距离上次成功更新不到 `refresh_min_interval_seconds`（默认 `120` 秒，配置在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，设为 `0` 则每次都更新），会跳过更新（`refresh.status` 为 `"skipped"` 并附带 `refresh.reason`）。加 `--refresh` 可强制更新，加 `--no-refresh` 会一律跳过（同时传两者会报错）。如果有 Teams 官方导出文件可以补充更早的历史，用 `uv run teams-reader import-export <导出文件>` 导入（导入前先备份，见第 5 步）。查询不会改变 Teams 里的未读状态；但你自己在 Teams 里打开某个会话，Teams 仍会把它标为已读。
 
-如果配置文件夹不在标准位置，在 `settings.toml` 里设置 `profile_dir`，或加 `--profile-dir` 参数。
+如果配置文件夹不在标准位置，在 `%LOCALAPPDATA%\local-message-readers\settings.toml` 里设置 `profile_dir`，或加 `--profile-dir` 参数。
 
 按显示名称查询会话时，如果有多个一对一会话同名且 `last_time` 各自不同，`teams-reader` 会自动选取最新的一条，并把其余候选列在 `alternatives`（`[{id, last_time}]`）；如果其中包含群组或有两个 `last_time` 相同，仍会返回错误并列出各个 `id` 供指定。
 
@@ -109,7 +109,7 @@ Teams 会清理旧缓存，所以归档值得备份。每周的计划任务会�
    ```
 
    只能使用英文字母、数字和键盘上的符号；不能包含双引号 `"`、不能包含非英文字符，也不能以反斜杠结尾。请把密码记在你的密码管理器里：换新电脑恢复时需要它。
-4. **一个已存在的目标文件夹**（例如 OneDrive 里的文件夹）。在 `settings.toml` 里设置 `backup_dest`，或加 `--dest` 参数。
+4. **一个已存在的目标文件夹**（例如 OneDrive 里的文件夹）。在 `%LOCALAPPDATA%\local-message-readers\settings.toml` 里设置 `backup_dest`，或加 `--dest` 参数。
 5. **计划任务**，在项目主文件夹里注册一次：
 
    ```powershell

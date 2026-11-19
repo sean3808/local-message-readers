@@ -170,6 +170,8 @@ def default_refresh_command(archive_path: Path) -> list[str]:
         str(archive_path),
         "--limit",
         "1",
+        # The backup must see a real refresh, never a throttled skip
+        "--refresh",
     ]
     settings_file = active_settings_path()
     if settings_file is not None:

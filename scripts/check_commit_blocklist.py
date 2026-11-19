@@ -102,7 +102,7 @@ def main(argv=None):
     except (OSError, ValueError, subprocess.CalledProcessError):
         # ValueError covers UnicodeDecodeError and missing/empty blocklist; never echo its text,
         # because a decode error can quote bytes from the private blocklist file
-        print("commit blocklist check failed; verify commit_blocklist in settings.toml, its UTF-8 file, and Git state", file=sys.stderr)
+        print("commit blocklist check failed; verify commit_blocklist in the settings file (--settings, or %LOCALAPPDATA%\\local-message-readers\\settings.toml), its UTF-8 file, and Git state", file=sys.stderr)
         return 1
 
 

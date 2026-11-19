@@ -251,3 +251,34 @@ def test_failed_refresh_does_not_suppress_next_query_within_interval(
 
     assert code2 == 0
     assert out2["refresh"]["status"] == "ok"
+
+
+def test_refresh_that_raises_does_not_count_as_recent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An exception escaping ingest_cache (e.g. the temp snapshot cannot be created) must not leave the attempt marked ok."""
+    t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
+    Archive(db_path=arc_path).record_sync("teams", source="cache_attempt", status="ok")
+
+    with (
+        patch("readers.teams.cli.ingest_cache", side_effect=OSError("cannot create temp snapshot")),
+        patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
+    ):
+        code1, out1 = _run_main(
+            "conversations", "--refresh",
+            settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
+        )
+    assert code1 != 0
+    assert "cannot create temp snapshot" in out1["error"]
+
+    with (
+        patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(with_replychains=True)),
+        patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=20)),
+    ):
+        code2, out2 = _run_main(
+            "conversations",
+            settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
+        )
+    assert code2 == 0
+    assert out2["refresh"]["status"] == "ok"
