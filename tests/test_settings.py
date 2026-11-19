@@ -56,6 +56,10 @@ def test_missing_explicit_file_names_the_file(tmp_path):
         ('[smoke]\nwechat = "yes"\n', "smoke.wechat"),
         ('[smoke]\nteams_group_idd = "x"\n', "smoke.teams_group_idd"),
         ('smoke = "x"\n', "smoke"),
+        ('refresh_min_interval_seconds = -1\n', "refresh_min_interval_seconds"),
+        ('refresh_min_interval_seconds = "120"\n', "refresh_min_interval_seconds"),
+        ('refresh_min_interval_seconds = true\n', "refresh_min_interval_seconds"),
+        ('refresh_min_interval_seconds = 1.5\n', "refresh_min_interval_seconds"),
     ],
 )
 def test_invalid_content_names_file_and_key(tmp_path, text, key):
@@ -194,3 +198,13 @@ def test_every_entry_point_reads_default_localappdata_settings_without_flag(tmp_
     assert result.returncode == 1
     output = json.loads(result.stdout)["error"] if stream_name == "stdout" else result.stderr
     assert str(settings_file) in output and "unknown_default_probe" in output
+
+
+def test_refresh_min_interval_seconds_preserves_zero(tmp_path):
+    assert get_setting("refresh_min_interval_seconds") is None
+    zero_file = write(tmp_path, "refresh_min_interval_seconds = 0\n")
+    configure(zero_file)
+    assert get_setting("refresh_min_interval_seconds") == 0
+    positive_file = write(tmp_path, "refresh_min_interval_seconds = 45\n")
+    configure(positive_file)
+    assert get_setting("refresh_min_interval_seconds") == 45

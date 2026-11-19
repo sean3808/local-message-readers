@@ -17,6 +17,9 @@ backup_dest = "D:/example/backups/local-message-readers"
 # Your own Teams user ID, used when the data does not say who sent a message. Optional.
 teams_self_id = "8:example"
 
+# Minimum seconds between automatic Teams cache refreshes (non-negative integer, default 120; 0 = always refresh). Optional.
+refresh_min_interval_seconds = 120
+
 # Private commit blocklist (UTF-8, one literal per line). The pre-commit check fails closed without it.
 commit_blocklist = "D:/example/private/commit-blocklist.txt"
 

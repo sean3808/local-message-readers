@@ -74,7 +74,7 @@ cd <repo>
 uv run teams-reader conversations
 ```
 
-看輸出 JSON 裡的 `refresh.status` 與 `refresh.current_up_to`：它們會告訴你同步是否成功、資料新到什麼時候。如果有 Teams 官方匯出檔可以補更早的歷史，用 `uv run teams-reader import-export <匯出檔>` 匯入（匯入前先備份，見步驟 5）。查詢不會改變 Teams 裡的未讀狀態；但你自己在 Teams 裡打開某個對話，Teams 還是會把它標成已讀。
+看輸出 JSON 裡的 `refresh.status` 與 `refresh.current_up_to`：它們會告訴你同步是否成功、資料新到什麼時候。若距離上次成功更新不到 `refresh_min_interval_seconds`（預設 `120` 秒，設在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，設為 `0` 則每次都更新），會略過更新（`refresh.status` 為 `"skipped"` 並附帶 `refresh.reason`）。加 `--refresh` 可強制更新，加 `--no-refresh` 會一律略過（同時傳兩者會報錯）。如果有 Teams 官方匯出檔可以補更早的歷史，用 `uv run teams-reader import-export <匯出檔>` 匯入（匯入前先備份，見步驟 5）。查詢不會改變 Teams 裡的未讀狀態；但你自己在 Teams 裡打開某個對話，Teams 還是會把它標成已讀。
 
 如果設定檔資料夾不在標準位置，在 `settings.toml` 設 `profile_dir`，或加 `--profile-dir` 參數。
 

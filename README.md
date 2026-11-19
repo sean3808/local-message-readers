@@ -74,7 +74,7 @@ cd <repo>
 uv run teams-reader conversations
 ```
 
-Look at `refresh.status` and `refresh.current_up_to` in the JSON: they say whether the sync worked and how far the data reaches. If you have the official Teams export for older history, add it with `uv run teams-reader import-export <export file>` (take a backup first, see step 5). Querying never changes the unread state in Teams. If you also open a conversation in Teams itself, Teams marks it as read.
+Look at `refresh.status` and `refresh.current_up_to` in the JSON: they say whether the sync worked and how far the data reaches. When a query runs within `refresh_min_interval_seconds` (default `120`, configured in `%LOCALAPPDATA%\local-message-readers\settings.toml`; `0` disables throttling) of the last successful refresh, the refresh is skipped (`refresh.status` is `"skipped"` with `refresh.reason`). Pass `--refresh` to force a refresh, or `--no-refresh` to always skip (passing both together is an error). If you have the official Teams export for older history, add it with `uv run teams-reader import-export <export file>` (take a backup first, see step 5). Querying never changes the unread state in Teams. If you also open a conversation in Teams itself, Teams marks it as read.
 
 If the profile folder is not in the standard place, set `profile_dir` in `settings.toml` or pass `--profile-dir`.
 

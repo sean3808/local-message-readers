@@ -14,7 +14,7 @@ from typing import Any
 
 from readers.archive import Archive, get_default_archive_path
 from readers.backup import get_default_log_path
-from readers.settings import SETTINGS_HELP
+from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.teams.download import download_message
 from readers.teams.export import import_export
@@ -116,6 +116,7 @@ def _parser() -> argparse.ArgumentParser:
     sub_common = argparse.ArgumentParser(add_help=False)
     sub_common.add_argument("--archive-path", default=argparse.SUPPRESS, help="Path of the archive SQLite file")
     sub_common.add_argument("--no-refresh", action="store_true", default=argparse.SUPPRESS, help="Skip the cache refresh and query the existing archive directly")
+    sub_common.add_argument("--refresh", action="store_true", default=argparse.SUPPRESS, help="Force a cache refresh even if the last refresh was recent")
     sub_common.add_argument("--profile-dir", default=argparse.SUPPRESS, help="Teams personal profile path (takes precedence over the settings file)")
     sub_common.add_argument("--settings", default=argparse.SUPPRESS, help=SETTINGS_HELP)
 
@@ -125,6 +126,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--archive-path", default=None, help="Path of the archive SQLite file")
     p.add_argument("--no-refresh", action="store_true", default=False, help="Skip the cache refresh and query the existing archive directly")
+    p.add_argument("--refresh", action="store_true", default=False, help="Force a cache refresh even if the last refresh was recent")
     p.add_argument("--profile-dir", default=None, help="Teams personal profile path (takes precedence over the settings file)")
     p.add_argument("--settings", default=None, help=SETTINGS_HELP)
 
@@ -271,6 +273,37 @@ def backup_status(failures: list[str]) -> dict[str, Any]:
     }
 
 
+DEFAULT_REFRESH_MIN_INTERVAL_SECONDS = 120
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _throttle_reason(archive: Archive) -> str | None:
+    """Return a skip reason when the last successful cache refresh is within the configured interval."""
+    interval = get_setting("refresh_min_interval_seconds")
+    if interval is None:
+        interval = DEFAULT_REFRESH_MIN_INTERVAL_SECONDS
+    if interval <= 0:
+        return None
+    if archive.get_sync_status("teams", source="cache_attempt") == "failed":
+        return None
+    last_ok = archive.get_data_current_up_to("teams")
+    if last_ok is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(last_ok)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    elapsed = (_now() - parsed).total_seconds()
+    if 0 <= elapsed < interval:
+        return f"Last successful refresh was {int(elapsed)}s ago (within {interval}s interval)"
+    return None
+
+
 def _profile_dir(args: argparse.Namespace) -> Path:
     override = getattr(args, "profile_dir", None)
     return Path(override) if override else get_tfl_profile_dir()
@@ -320,27 +353,37 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     profile_dir = _profile_dir(args)
     refresh_status = "ok"
     refresh_error: str | None = None
+    refresh_reason: str | None = None
 
     if getattr(args, "no_refresh", False):
         refresh_status = "skipped"
+        refresh_reason = "Refresh skipped because --no-refresh was specified"
+    elif not getattr(args, "refresh", False) and (throttle_reason := _throttle_reason(archive)) is not None:
+        refresh_status = "skipped"
+        refresh_reason = throttle_reason
     elif not profile_dir.exists():
         refresh_status = "failed"
         refresh_error = f"Teams personal profile not found ({profile_dir})"
         failures.append(refresh_error)
+        archive.record_sync(channel="teams", source="cache_attempt", status="failed")
     else:
         outcome = ingest_cache(archive, profile_dir)
         failures.extend(outcome.failures)
         if outcome.success:
             refresh_status = "ok"
+            archive.record_sync(channel="teams", source="cache_attempt", status="ok")
         else:
             refresh_status = "failed"
             refresh_error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
+            archive.record_sync(channel="teams", source="cache_attempt", status="failed")
 
     current_up_to = archive.get_data_current_up_to("teams")
     refresh_outcome: dict[str, Any] = {
         "status": refresh_status,
         "current_up_to": current_up_to,
     }
+    if refresh_status == "skipped" and refresh_reason is not None:
+        refresh_outcome["reason"] = refresh_reason
     if current_up_to is None:
         refresh_outcome["current_up_to_reason"] = "The Teams cache has never been synced successfully; data currency is unknown"
     if refresh_status == "failed":
@@ -452,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = _parser()
     args = parser.parse_args(argv)
+    if getattr(args, "refresh", False) and getattr(args, "no_refresh", False):
+        parser.error("--refresh and --no-refresh cannot be used together")
 
     try:
         configure_settings(args.settings)

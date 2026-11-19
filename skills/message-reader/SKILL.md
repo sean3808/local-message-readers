@@ -40,7 +40,7 @@ Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"` (ma
 
 **Freshness**, check on every query:
 
-- `refresh.status`: `ok` = just synced; `skipped` = `--no-refresh` was used (allowed before or after the subcommand; skips the update and queries the archive directly); `failed` = the update failed, the reason is in `refresh.error`. For the latter two, report "data only reaches `refresh.current_up_to`".
+- `refresh.status`: `ok` = just synced; `skipped` = `--no-refresh` was used or the last successful refresh was within `refresh_min_interval_seconds` (default 120s), with the reason in `refresh.reason` (both `--no-refresh` and `--refresh` are allowed before or after the subcommand; `--refresh` forces a refresh, and passing both together is a usage error); `failed` = the update failed, the reason is in `refresh.error`. For the latter two, report "data only reaches `refresh.current_up_to`".
 - `refresh.current_up_to` is `null` = the cache was never synced successfully, the reason is in `refresh.current_up_to_reason`; report "the data cut-off time is unknown" and do not substitute another time.
 - `backup.stale` is true (no successful backup for more than 8 days, or never): tell the user "the backup is stale" and attach `backup.last_success`.
 - If a conversation's `last_seen_in_cache` in `conversations` is far earlier than `current_up_to`, this conversation was not covered by recent cache updates and its latest messages may be incomplete; say so in the report.

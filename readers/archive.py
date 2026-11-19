@@ -464,6 +464,15 @@ class Archive:
             ).fetchone()
             return str(row[0]) if row and row[0] else None
 
+    def get_sync_status(self, channel: str, source: str = "cache") -> str | None:
+        """Return the recorded status for (channel, source) in sync_state, or None if absent."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT status FROM sync_state WHERE channel = ? AND source = ?",
+                (channel, source),
+            ).fetchone()
+            return str(row[0]) if row and row[0] else None
+
     def ingest_conversations(
         self,
         channel: str,

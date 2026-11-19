@@ -20,6 +20,7 @@ _SCHEMA = {
     "profile_dir": str,
     "backup_dest": str,
     "teams_self_id": str,
+    "refresh_min_interval_seconds": int,
     "commit_blocklist": str,
     "commit_blocklist_public": list[str],
     "smoke": {
@@ -87,6 +88,8 @@ def load_settings(path: Path | str | None = None) -> dict:
                     )
             elif type(value) is not expected:
                 raise SettingsError(f"{path}: {full_key} must be {expected.__name__}")
+            elif expected is int and value < 0:
+                raise SettingsError(f"{path}: {full_key} must be >= 0")
 
     validate(data, _SCHEMA)
     return data
@@ -100,7 +103,7 @@ def get_setting(key: str, section: str | None = None):
     value = data.get(key)
     if isinstance(value, str):
         value = value.strip()
-    if isinstance(value, bool):
+    if isinstance(value, int):
         return value
     return value or None
 
