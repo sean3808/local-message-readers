@@ -43,7 +43,7 @@ All commands below are typed into PowerShell (open the Start menu, type `PowerSh
 
 4. Check that it works: `uv run wechat-reader --help` and `uv run teams-reader --help` should each print a usage text.
 
-Optional: copy `settings.example.toml` to `settings.toml` in `<repo>` and fill in only the values you need. It is ignored by git, every key is optional, and the file explains each key. A misspelled key stops the command with an error that names the key. Every command also accepts `--settings <file>` to read another file.
+Optional: copy `settings.example.toml` to `%LOCALAPPDATA%\local-message-readers\settings.toml` and fill in only the values you need (if you already have a `settings.toml` in `<repo>`, move it there; the copy in `<repo>` is no longer read). Every key is optional, and the file explains each key. A misspelled key stops the command with an error that names the key. Every command also accepts `--settings <file>` to read another file.
 
 ### 2. WeChat: get the key
 

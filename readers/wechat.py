@@ -233,7 +233,7 @@ def recent(app, since, limit):
 
 def _parser():
     p = argparse.ArgumentParser(prog="wechat-reader", description="Read the local WeChat read-only; JSON output to stdout")
-    p.add_argument("--settings", default=None, help="Settings file path (default: settings.toml in the repo root)")
+    p.add_argument("--settings", default=None, help="Settings file path (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("conversations", help="List conversations by last message time")

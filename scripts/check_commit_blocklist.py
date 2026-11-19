@@ -87,7 +87,7 @@ def scan_files(entries, files, public=()):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", action="store_true", help="scan all tracked files at HEAD")
-    parser.add_argument("--settings", default=None, help="settings file (default: settings.toml in the repo root)")
+    parser.add_argument("--settings", default=None, help="settings file (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)")
     args = parser.parse_args(argv)
     try:
         configure(args.settings)

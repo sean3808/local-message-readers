@@ -43,7 +43,7 @@ Teams 的快取只保留最近一段時間的訊息，所以 `teams-reader` 另�
 
 4. 確認可以執行：`uv run wechat-reader --help` 與 `uv run teams-reader --help` 都應該印出使用說明。
 
-選用：把 `<repo>` 裡的 `settings.example.toml` 複製成 `settings.toml`，只填你需要的值。這個檔案不進 git，每個欄位都是選填，檔內有各欄位的說明。欄位名稱拼錯會讓指令停下並指出是哪個欄位。每個指令也接受 `--settings <檔案>` 改讀別的設定檔。
+選用：把 `<repo>` 裡的 `settings.example.toml` 複製成 `%LOCALAPPDATA%\local-message-readers\settings.toml`，只填你需要的值（如果你原本在 `<repo>` 放了 `settings.toml`，請把它搬過去；`<repo>` 裡的複本不會再被讀取）。每個欄位都是選填，檔內有各欄位的說明。欄位名稱拼錯會讓指令停下並指出是哪個欄位。每個指令也接受 `--settings <檔案>` 改讀別的設定檔。
 
 ### 2. WeChat：取得金鑰
 

@@ -43,7 +43,7 @@ Teams 的缓存只保留最近一段时间的消息，所以 `teams-reader` 还�
 
 4. 确认可以运行：`uv run wechat-reader --help` 和 `uv run teams-reader --help` 都应该打印出使用说明。
 
-可选：把 `<repo>` 里的 `settings.example.toml` 复制为 `settings.toml`，只填你需要的值。这个文件不进 git，每个字段都是可选的，文件里有各字段的说明。字段名拼错会让命令停下并指出是哪个字段。每个命令也支持 `--settings <文件>` 改读其他设置文件。
+可选：把 `<repo>` 里的 `settings.example.toml` 复制为 `%LOCALAPPDATA%\local-message-readers\settings.toml`，只填你需要的值（如果你原本在 `<repo>` 放了 `settings.toml`，请把它移过去；`<repo>` 里的副本不会再被读取）。每个字段都是可选的，文件里有各字段的说明。字段名拼错会让命令停下并指出是哪个字段。每个命令也支持 `--settings <文件>` 改读其他设置文件。
 
 ### 2. WeChat：获取密钥
 

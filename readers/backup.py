@@ -643,7 +643,7 @@ def main(argv: list[str] | None = None) -> None:
         "--settings",
         type=Path,
         default=None,
-        help="Settings file (default: settings.toml in the repo root)",
+        help="Settings file (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)",
     )
 
     args = parser.parse_args(argv)

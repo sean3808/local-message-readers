@@ -1,5 +1,6 @@
-# Copy this file to settings.toml (same folder) and fill in your own values.
-# settings.toml is ignored by git; this example is tracked. Every key is optional.
+# Copy this file to %LOCALAPPDATA%\local-message-readers\settings.toml and fill in your own values.
+# If you have an existing settings.toml in the repo root, move it there (the repo-root copy is no longer read).
+# This example is tracked; any stale settings.toml in the repo root is ignored by git. Every key is optional.
 # Another settings file can be selected with --settings <file> on every entry point:
 #   teams-reader, wechat-reader, python -m readers.backup, scripts/check_commit_blocklist.py
 # Unknown keys or values of the wrong type stop the command with an error naming the file and key.

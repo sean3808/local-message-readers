@@ -1,14 +1,19 @@
 """Locate, parse and validate the personal settings file (settings.toml).
 
 Every entry point accepts ``--settings <file>`` and calls ``configure`` with it;
-without it the repo-root ``settings.toml`` is used. A missing default file means
-"nothing configured"; a missing explicit file is an error.
+without it ``%LOCALAPPDATA%\\local-message-readers\\settings.toml`` is used. A
+missing default file means "nothing configured"; a missing explicit file is an error.
 """
 
+import os
 import tomllib
 from pathlib import Path
 
-DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.toml"
+DEFAULT_SETTINGS_PATH = (
+    Path(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"))
+    / "local-message-readers"
+    / "settings.toml"
+)
 _SCHEMA = {
     "archive_path": str,
     "profile_dir": str,

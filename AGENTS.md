@@ -12,7 +12,7 @@ This repository is the public home of the project (ADR-0009). A bare `#NNN` in t
 
 ## Readers
 
-In the commands below, `<repo>` is the folder where you cloned this repository. Run them from `<repo>`, or from any other project with `uv run --project <repo> <reader> ...` (for example `uv run --project <repo> teams-reader --no-refresh conversations`). `uv run --directory <repo>` also works; the settings file is found through the package location either way.
+In the commands below, `<repo>` is the folder where you cloned this repository. Run them from `<repo>`, or from any other project with `uv run --project <repo> <reader> ...` (for example `uv run --project <repo> teams-reader --no-refresh conversations`). `uv run --directory <repo>` also works.
 
 - **WeChat**: `uv run wechat-reader conversations | messages <conversation> | search <keyword> | recent --since <time>` (`--help` lists the parameters). The reader does not remember a read position; the caller keeps the `--since` value for `recent`; pass back the last message's `time` unchanged (time inputs follow ADR-0010). Official accounts (ids starting with `gh_`, and the folded subscription/service placeholders) are excluded from `conversations`, `search` and `recent`. After a WeChat upgrade, set `wechat = true` under `[smoke]` in `settings.toml`, then run `uv run pytest tests/test_wechat_smoke.py`.
   - Data freshness: the reader only reads data WeChat has already written on this computer. Messages from periods when the desktop app was off or logged out are not backfilled automatically; first sync chat history between the phone and the desktop app. The reader cannot tell whether the data is complete; before reading `recent`, compare against the time of the latest message on the phone.
@@ -32,7 +32,7 @@ In the commands below, `<repo>` is the folder where you cloned this repository. 
 
 ## Settings file
 
-Personal settings (backup destination, own Teams identity, location of the commit blocklist, archive and profile paths, targets of the real-data smoke tests) all live in `settings.toml` in the repo root; environment variables are not used. Copy `settings.example.toml` to `settings.toml` and fill in your own values. `settings.toml` is ignored by git; the example is tracked and explains every key. The program finds the repo root through the package location, so calling it from another project with `uv run --directory <repo>` also reads it.
+Personal settings (backup destination, own Teams identity, location of the commit blocklist, archive and profile paths, targets of the real-data smoke tests) all live in `%LOCALAPPDATA%\local-message-readers\settings.toml` (the same folder as the default archive); environment variables are not used for settings. Copy `settings.example.toml` there as `settings.toml` and fill in your own values; if you have an existing `settings.toml` in the repo root, move it there (the repo-root copy is no longer read, and `.gitignore` still ignores it so a stale copy is never committed). `settings.example.toml` is tracked and explains every key.
 
 - Every entry point (`teams-reader`, `wechat-reader`, `python -m readers.backup`, `scripts/check_commit_blocklist.py`) accepts `--settings <file>` to read another settings file; no `settings.toml` means no value is set.
 - Command-line parameters (`--archive-path`, `--profile-dir`, `--dest`) take precedence over the settings file.

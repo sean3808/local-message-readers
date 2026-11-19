@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import REAL_SETTINGS_PATH, settings_args, write_settings
+from conftest import settings_args, write_settings
 
 import readers.settings as settings_module
 from readers.backup import default_refresh_command
@@ -18,7 +18,7 @@ def write(tmp_path: Path, text: str) -> Path:
 
 
 def test_settings_example_lists_every_known_key():
-    example = Path(REAL_SETTINGS_PATH).parent / "settings.example.toml"
+    example = Path(__file__).resolve().parent.parent / "settings.example.toml"
     text = example.read_text(encoding="utf-8")
     loaded = load_settings(example)
     top = {key for key in settings_module._SCHEMA if key != "smoke"}
@@ -128,3 +128,82 @@ def test_smoke_is_skipped_without_a_settings_file_or_section(tmp_path, monkeypat
     present = write(tmp_path, 'backup_dest = "X:/dest"\n')
     monkeypatch.setattr(conftest, "REAL_SETTINGS_PATH", present)
     assert conftest.real_smoke_settings() == {}
+
+
+def test_default_settings_path_uses_localappdata(tmp_path):
+    import os
+
+    localappdata = tmp_path / "localappdata"
+    expected = localappdata / "local-message-readers" / "settings.toml"
+    expected.parent.mkdir(parents=True)
+    expected.write_text('teams_self_id = "8:from-localappdata"\n', encoding="utf-8")
+
+    env = {**os.environ, "LOCALAPPDATA": str(localappdata)}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from readers.settings import DEFAULT_SETTINGS_PATH, get_setting; "
+            "print(DEFAULT_SETTINGS_PATH); print(get_setting('teams_self_id'))",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    lines = result.stdout.strip().splitlines()
+    assert Path(lines[0]) == expected
+    assert lines[1] == "8:from-localappdata"
+
+
+def test_missing_localappdata_settings_ignores_repo_root_and_cwd(tmp_path):
+    import os
+
+    localappdata = tmp_path / "empty-localappdata"
+    localappdata.mkdir()
+    (tmp_path / "settings.toml").write_text('teams_self_id = "8:from-cwd"\n', encoding="utf-8")
+
+    env = {**os.environ, "LOCALAPPDATA": str(localappdata)}
+    result = subprocess.run(
+        [sys.executable, "-c", "import json; from readers.settings import load_settings; print(json.dumps(load_settings()))"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    assert json.loads(result.stdout) == {}
+
+
+@pytest.mark.parametrize(
+    ("command", "stream_name"),
+    [
+        (["-m", "readers.teams", "--no-refresh", "conversations"], "stdout"),
+        (["-m", "readers.wechat", "conversations"], "stdout"),
+        (["-m", "readers.backup"], "stderr"),
+        ([str(Path(__file__).resolve().parent.parent / "scripts" / "check_commit_blocklist.py")], "stderr"),
+    ],
+)
+def test_every_entry_point_reads_default_localappdata_settings_without_flag(tmp_path, command, stream_name):
+    import os
+
+    localappdata = tmp_path / "localappdata"
+    settings_file = localappdata / "local-message-readers" / "settings.toml"
+    settings_file.parent.mkdir(parents=True)
+    settings_file.write_text('unknown_default_probe = "x"\n', encoding="utf-8")
+
+    env = {**os.environ, "LOCALAPPDATA": str(localappdata)}
+    result = subprocess.run(
+        [sys.executable, *command],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert result.returncode == 1
+    output = json.loads(result.stdout)["error"] if stream_name == "stdout" else result.stderr
+    assert str(settings_file) in output and "unknown_default_probe" in output
