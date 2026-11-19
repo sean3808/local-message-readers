@@ -491,7 +491,7 @@ def run_backup(
             refresh_command=refresh_command,
         )
     else:
-        refresh_detail = "Backup destination is required: specify --dest or set backup_dest in settings.toml"
+        refresh_detail = "Backup destination is required: specify --dest or set backup_dest in the settings file (%LOCALAPPDATA%\\local-message-readers\\settings.toml)"
         sys.stderr.write(refresh_detail + "\n")
 
     # Step 2: Backup

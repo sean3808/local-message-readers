@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,7 +22,7 @@ from readers.teams.export import import_export
 from readers.teams.reconcile import reconcile_export
 from readers.teams.repair import repair_fffd
 from readers.teams.system_text import migrate_system_text
-from readers.timeparse import FORMATS_HELP, parse_time_bound
+from readers.timeparse import FORMATS_HELP
 from readers.teams.snapshot import (
     get_tfl_profile_dir,
     ingest_cache,
@@ -29,15 +30,20 @@ from readers.teams.snapshot import (
 )
 
 
-def _last_time_sort_key(conv: dict[str, Any]) -> tuple[int, Any]:
-    """Sort key for conversation last_time: unknown sorts oldest; equal instants tie."""
+def _last_time_sort_key(conv: dict[str, Any]) -> tuple[bool, float]:
+    """Order by last_time as "known instant or unknown": unknown sorts oldest, and all unknowns tie.
+
+    Only an ISO time carrying an offset is a known instant. Blank, malformed or offset-less values
+    are unknown rather than guessed, so two of them always tie and keep the ambiguity error.
+    """
     raw = conv.get("last_time")
-    if not raw:
-        return (0, "")
     try:
-        return (2, parse_time_bound(raw))
+        dt = datetime.fromisoformat(raw.strip()) if isinstance(raw, str) else None
     except ValueError:
-        return (1, raw)
+        dt = None
+    if dt is None or dt.tzinfo is None:
+        return (False, 0.0)
+    return (True, dt.timestamp())
 
 
 def resolve_conversation_with_alternatives(
@@ -269,33 +275,56 @@ def backup_status(failures: list[str]) -> dict[str, Any]:
 
 
 DEFAULT_REFRESH_MIN_INTERVAL_SECONDS = 120
-_CACHE_ATTEMPT_SOURCE = "cache_attempt"
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _throttle_reason(archive: Archive) -> str | None:
-    """Return a skip reason when the last successful cache refresh is within the configured interval."""
+def _profile_key(profile_dir: Path) -> str:
+    return os.path.normcase(str(profile_dir.resolve()))
+
+
+def _throttle_reason(archive: Archive, profile_dir: Path) -> str | None:
+    """Return a skip reason when the last clean refresh of this profile is within the interval, else None."""
     interval = get_setting("refresh_min_interval_seconds")
     if interval is None:
         interval = DEFAULT_REFRESH_MIN_INTERVAL_SECONDS
     if interval <= 0:
         return None
-    if archive.get_sync_status("teams", source=_CACHE_ATTEMPT_SOURCE) == "failed":
+    token = archive.get_clean_refresh("teams")
+    if token is None or token[1] != _profile_key(profile_dir):
         return None
-    last_ok = archive.get_data_current_up_to("teams")
-    if last_ok is None:
-        return None
-    try:
-        last_ok_ts = parse_time_bound(last_ok)
-    except ValueError:
-        return None
-    elapsed = _now().timestamp() - last_ok_ts
+    elapsed = _now().timestamp() - token[0]
     if 0 <= elapsed < interval:
-        return f"Last successful refresh was {int(elapsed)}s ago (within {interval}s interval)"
+        return f"Last clean refresh was {int(elapsed)}s ago (within {interval}s interval)"
     return None
+
+
+def _refresh_cache(archive: Archive, profile_dir: Path) -> tuple[str, str | None, list[str]]:
+    """Run one cache refresh and own all throttle bookkeeping. Returns (status, error, failures).
+
+    The throttle token is dropped when the refresh starts and, unless the refresh finished cleanly
+    (success and no per-item failures), dropped again when it ends. A refresh that raises, is killed,
+    reports failures, or fails after a concurrent clean refresh therefore never leaves a token behind.
+    """
+    archive.clear_clean_refresh("teams")
+    clean = False
+    try:
+        if not profile_dir.exists():
+            error = f"Teams personal profile not found ({profile_dir})"
+            return "failed", error, [error]
+        outcome = ingest_cache(archive, profile_dir)
+        if not outcome.success:
+            error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
+            return "failed", error, list(outcome.failures)
+        if not outcome.failures:
+            archive.set_clean_refresh("teams", _now().timestamp(), _profile_key(profile_dir))
+            clean = True
+        return "ok", None, list(outcome.failures)
+    finally:
+        if not clean:
+            archive.clear_clean_refresh("teams")
 
 
 def _profile_dir(args: argparse.Namespace) -> Path:
@@ -352,30 +381,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "no_refresh", False):
         refresh_status = "skipped"
         refresh_reason = "Refresh skipped because --no-refresh was specified"
-    elif not getattr(args, "refresh", False) and (throttle_reason := _throttle_reason(archive)) is not None:
+    elif not getattr(args, "refresh", False) and (throttle_reason := _throttle_reason(archive, profile_dir)) is not None:
         refresh_status = "skipped"
         refresh_reason = throttle_reason
-    elif not profile_dir.exists():
-        refresh_status = "failed"
-        refresh_error = f"Teams personal profile not found ({profile_dir})"
-        failures.append(refresh_error)
     else:
-        # Mark the attempt failed first (covers a killed process), and again if ingest_cache raises:
-        # a concurrent refresh may have written "ok" in between, which must not hide this failure
-        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
-        try:
-            outcome = ingest_cache(archive, profile_dir)
-        except BaseException:
-            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
-            raise
-        failures.extend(outcome.failures)
-        if outcome.success:
-            refresh_status = "ok"
-        else:
-            refresh_status = "failed"
-            refresh_error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
-    if refresh_status != "skipped":
-        archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status=refresh_status)
+        refresh_status, refresh_error, refresh_failures = _refresh_cache(archive, profile_dir)
+        failures.extend(refresh_failures)
 
     current_up_to = archive.get_data_current_up_to("teams")
     refresh_outcome: dict[str, Any] = {

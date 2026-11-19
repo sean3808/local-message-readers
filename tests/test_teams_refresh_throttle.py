@@ -49,7 +49,12 @@ def _seed_sync_and_settings(
     settings.write_text(f"refresh_min_interval_seconds = {interval}\n", encoding="utf-8")
     arc = Archive(db_path=arc_path)
     arc.record_sync("teams", source="cache", status="ok", sync_time=sync_time.isoformat(timespec="seconds"))
+    arc.set_clean_refresh("teams", sync_time.timestamp(), cli._profile_key(profile))
     return arc_path, profile, settings
+
+
+def _token(arc_path: Path) -> tuple[float, str] | None:
+    return Archive(db_path=arc_path).get_clean_refresh("teams")
 
 
 def test_second_query_within_interval_skips_without_reading_cache(
@@ -253,40 +258,43 @@ def test_failed_refresh_does_not_suppress_next_query_within_interval(
     assert out2["refresh"]["status"] == "ok"
 
 
-def test_refresh_that_raises_does_not_count_as_recent(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """An exception escaping ingest_cache (e.g. the temp snapshot cannot be created) must not leave the attempt marked ok."""
+def _clean_outcome(failures: list[str]):
+    from readers.teams.snapshot import IngestOutcome
+
+    return IngestOutcome(success=True, failures=failures)
+
+
+def test_refresh_that_raises_leaves_no_token(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """An exception escaping ingest_cache (e.g. the temp snapshot cannot be created) must not count as recent."""
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
     arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
-    Archive(db_path=arc_path).record_sync("teams", source="cache_attempt", status="ok")
 
     with (
         patch("readers.teams.cli.ingest_cache", side_effect=OSError("cannot create temp snapshot")),
         patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
     ):
-        code1, out1 = _run_main(
+        code, out = _run_main(
             "conversations", "--refresh",
             settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
         )
-    assert code1 != 0
-    assert "cannot create temp snapshot" in out1["error"]
-    assert Archive(db_path=arc_path).get_sync_status("teams", source="cache_attempt") == "failed"
+    assert code != 0
+    assert "cannot create temp snapshot" in out["error"]
+    assert _token(arc_path) is None
 
 
-def test_refresh_that_raises_after_concurrent_success_still_records_failure(
+def test_failure_after_concurrent_clean_refresh_leaves_no_token(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A concurrent refresh writing "ok" while this one runs must not hide this run's exception."""
+    """A concurrent clean refresh writing a token while this one runs must not hide this run's failure."""
     t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
     arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
 
-    def concurrent_ok_then_raise(archive: Archive, _profile_dir: Path):
-        archive.record_sync("teams", source="cache_attempt", status="ok")
+    def concurrent_clean_then_raise(archive: Archive, profile_dir: Path):
+        archive.set_clean_refresh("teams", t0.timestamp() + 5, cli._profile_key(profile_dir))
         raise OSError("cannot create temp snapshot")
 
     with (
-        patch("readers.teams.cli.ingest_cache", side_effect=concurrent_ok_then_raise),
+        patch("readers.teams.cli.ingest_cache", side_effect=concurrent_clean_then_raise),
         patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
     ):
         code, _ = _run_main(
@@ -294,10 +302,31 @@ def test_refresh_that_raises_after_concurrent_success_still_records_failure(
             settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
         )
     assert code != 0
-    assert Archive(db_path=arc_path).get_sync_status("teams", source="cache_attempt") == "failed"
+    assert _token(arc_path) is None
+
+
+def test_refresh_with_failures_is_not_trusted_by_the_throttle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A refresh that succeeded but reported per-item failures leaves no token, so the next query refreshes and reports again."""
+    t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
 
     with (
-        patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(with_replychains=True)),
+        patch("readers.teams.cli.ingest_cache", return_value=_clean_outcome(["skipped 1 message"])),
+        patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
+    ):
+        code1, out1 = _run_main(
+            "conversations", "--refresh",
+            settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
+        )
+    assert code1 == 0
+    assert out1["refresh"]["status"] == "ok"
+    assert "skipped 1 message" in out1["failures"]
+    assert _token(arc_path) is None
+
+    with (
+        patch("readers.teams.cli.ingest_cache", return_value=_clean_outcome(["skipped 1 message"])) as ingest,
         patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=20)),
     ):
         code2, out2 = _run_main(
@@ -305,4 +334,29 @@ def test_refresh_that_raises_after_concurrent_success_still_records_failure(
             settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
         )
     assert code2 == 0
+    assert ingest.called
     assert out2["refresh"]["status"] == "ok"
+    assert "skipped 1 message" in out2["failures"]
+
+
+def test_clean_refresh_of_another_profile_does_not_throttle(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
+    arc_path, _profile_a, settings = _seed_sync_and_settings(tmp_path, 120, t0)
+    profile_b = tmp_path / "profile-b"
+    profile_b.mkdir()
+
+    with (
+        patch("readers.teams.cli.ingest_cache", return_value=_clean_outcome([])) as ingest,
+        patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
+    ):
+        code, out = _run_main(
+            "conversations",
+            settings_file=settings, archive_path=arc_path, profile_dir=profile_b, capsys=capsys,
+        )
+    assert code == 0
+    assert ingest.called
+    assert out["refresh"]["status"] == "ok"
+    assert _token(arc_path)[1] == cli._profile_key(profile_b)
+

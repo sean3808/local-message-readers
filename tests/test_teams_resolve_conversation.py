@@ -80,6 +80,33 @@ def test_messages_resolves_multiple_non_group_to_latest(tmp_path: Path) -> None:
     ]
 
 
+def _alice_pair_with_last_times(old: str | None, new: str | None) -> list[dict]:
+    pair = _alice_pair()
+    pair[0]["last_time"], pair[1]["last_time"] = old, new
+    return pair
+
+
+def test_blank_last_time_beside_known_sorts_oldest(tmp_path: Path) -> None:
+    """A whitespace-only last_time is unknown, not a crash: the known one wins and the blank one is listed."""
+    arc = tmp_path / "a.db"
+    _seed_convs(arc, _alice_pair_with_last_times("   ", "2026-11-19T13:22:12+08:00"))
+
+    code, out = run_cli("messages", "Alice Example", "--no-refresh", archive_path=arc)
+    assert code == 0, out
+    assert out["conversation"]["id"] == "19:example-new@thread.v2"
+    assert [a["id"] for a in out["alternatives"]] == ["19:example-old@thread.v2"]
+
+
+def test_two_different_unparseable_last_times_stay_ambiguous(tmp_path: Path) -> None:
+    """Two unknown instants tie, whatever their raw strings are; offset-less times count as unknown too."""
+    arc = tmp_path / "a.db"
+    _seed_convs(arc, _alice_pair_with_last_times("not a time", "2026-11-19 13:22:12"))
+
+    code, out = run_cli("messages", "Alice Example", "--no-refresh", archive_path=arc)
+    assert code != 0
+    assert "matches multiple conversations" in out["error"]
+
+
 def test_alias_match_with_other_current_name_stays_ambiguous(tmp_path: Path) -> None:
     """A conversation found only through an old alias name may be another person: never auto-pick it."""
     arc = tmp_path / "a.db"
