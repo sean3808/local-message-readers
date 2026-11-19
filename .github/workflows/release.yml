@@ -1,7 +1,8 @@
 name: Release
 
 # Pushing a version tag (for example v0.2.0) runs the tests and publishes a release
-# with auto-generated notes. Tags are pushed by scripts/release.ps1, which first waits
+# whose notes are that version's section of CHANGELOG.md, followed by the notes GitHub
+# generates from merged pull requests (grouped by .github/release.yml) and a compare link. Tags are pushed by scripts/release.ps1, which first waits
 # for CI on the tagged commit and reinstalls the global tool from it.
 on:
   push:
@@ -44,11 +45,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Create the release with generated notes
+      - uses: actions/checkout@v7.0.1
+
+      - name: Take the notes from CHANGELOG.md
+        run: python3 scripts/changelog_section.py "${GITHUB_REF_NAME#v}" > release-notes.md
+
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "${{ github.ref_name }}"
           --repo "${{ github.repository }}"
-          --verify-tag --generate-notes
+          --verify-tag --notes-file release-notes.md --generate-notes
           --title "${{ github.ref_name }}"

@@ -4,13 +4,14 @@
 
 .DESCRIPTION
     Run from a clean main that matches the remote. In order, and stopping at the first failure:
-      1. Check: branch is main, no uncommitted or untracked files, HEAD equals <Remote>/main, tag v<Version> is new.
+      1. Check: branch is main, no uncommitted or untracked files, HEAD equals <Remote>/main, tag v<Version> is new,
+         and CHANGELOG.md has notes under "## [<Version>]" (they become the GitHub Release notes).
       2. Set the version with `uv version` (updates pyproject.toml and uv.lock), commit it and push main.
          Skipped when the project already has this version.
       3. Wait for the CI workflow (.github/workflows/ci.yml) on that commit to pass.
       4. Reinstall the global tool from the working tree (non-editable, ADR-0011) and run both readers' --help.
       5. Create the annotated tag v<Version> and push it. The Release workflow then tests the tag and publishes
-         the GitHub Release with generated notes.
+         the GitHub Release with that CHANGELOG.md section as its notes.
     Nothing is tagged unless steps 1-4 pass. Rerunning with the same version after a failure is safe.
 
 .PARAMETER Version
@@ -58,6 +59,7 @@ $head = (Invoke-Native 'git rev-parse HEAD' { git rev-parse HEAD }).Trim()
 $remoteHead = (Invoke-Native "git rev-parse $Remote/main" { git rev-parse "$Remote/main" }).Trim()
 if ($head -ne $remoteHead) { throw "HEAD ($head) differs from $Remote/main ($remoteHead); pull or push first." }
 if (git tag --list $tag) { throw "Tag $tag already exists." }
+Invoke-Native "release notes for $Version in CHANGELOG.md" { uv run python scripts/changelog_section.py $Version } | Out-Null
 Write-Step 'preconditions ok'
 
 # 2. Version commit
