@@ -1,7 +1,7 @@
 """Shared test isolation: tests never read the real settings.toml.
 
 - In-process tests: the autouse fixture points the default settings path at a file that does
-  not exist, so the real repo-root settings.toml is never consulted.
+  not exist, so the real settings.toml is never consulted.
 - Subprocess tests: always pass ``--settings <file>`` built by ``write_settings`` /
   ``settings_args``; archive, profile and backup destination all live under ``tmp_path``.
 """

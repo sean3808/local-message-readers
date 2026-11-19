@@ -33,6 +33,7 @@ from wechat_cli.core.messages import (
     validate_pagination,
 )
 
+from readers.settings import SETTINGS_HELP
 from readers.settings import configure as configure_settings
 from readers.timeparse import FORMATS_HELP, parse_time_range
 
@@ -233,7 +234,7 @@ def recent(app, since, limit):
 
 def _parser():
     p = argparse.ArgumentParser(prog="wechat-reader", description="Read the local WeChat read-only; JSON output to stdout")
-    p.add_argument("--settings", default=None, help="Settings file path (default: settings.toml in the repo root)")
+    p.add_argument("--settings", default=None, help=SETTINGS_HELP)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("conversations", help="List conversations by last message time")

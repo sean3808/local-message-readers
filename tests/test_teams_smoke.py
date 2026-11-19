@@ -397,13 +397,13 @@ def test_conversation_name_resolution(shared_teams_archive: tuple[Path, dict[str
     assert code_exact == 0, out_exact
     assert out_exact["conversation"]["id"] == SAMPLE_CONV_ID
 
-    # 2. Ambiguous display name (conversations sharing a name; two 1:1 with the same name)
+    # 2. Two 1:1 conversations sharing a display name: resolves to the newest and lists the other in alternatives (#2)
     code_ambig, out_ambig = run_cli("messages", SMOKE["teams_ambiguous_name"], "--limit", "1", "--no-refresh", archive_path=arc_path)
-    assert code_ambig != 0
-    assert "error" in out_ambig
-    assert "matches multiple conversations" in out_ambig["error"]
-    assert SMOKE["teams_ambiguous_id_1"] in out_ambig["error"]
-    assert SMOKE["teams_ambiguous_id_2"] in out_ambig["error"]
+    assert code_ambig == 0, out_ambig
+    expected_ids = {SMOKE["teams_ambiguous_id_1"], SMOKE["teams_ambiguous_id_2"]}
+    assert out_ambig["conversation"]["id"] in expected_ids
+    alt_ids = {a["id"] for a in out_ambig.get("alternatives", [])}
+    assert expected_ids - {out_ambig["conversation"]["id"]} <= alt_ids
 
     # 3. Unknown name
     code_unknown, out_unknown = run_cli("messages", "NoSuchConversation_XYZ", "--limit", "1", "--no-refresh", archive_path=arc_path)

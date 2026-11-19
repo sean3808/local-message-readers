@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from readers.settings import SettingsError, configure, get_path_setting, get_setting
+from readers.settings import SETTINGS_HELP, SettingsError, configure, get_path_setting, get_setting
 
 
 def git(*args):
@@ -87,7 +87,7 @@ def scan_files(entries, files, public=()):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--head", action="store_true", help="scan all tracked files at HEAD")
-    parser.add_argument("--settings", default=None, help="settings file (default: settings.toml in the repo root)")
+    parser.add_argument("--settings", default=None, help=SETTINGS_HELP)
     args = parser.parse_args(argv)
     try:
         configure(args.settings)
@@ -102,7 +102,7 @@ def main(argv=None):
     except (OSError, ValueError, subprocess.CalledProcessError):
         # ValueError covers UnicodeDecodeError and missing/empty blocklist; never echo its text,
         # because a decode error can quote bytes from the private blocklist file
-        print("commit blocklist check failed; verify commit_blocklist in settings.toml, its UTF-8 file, and Git state", file=sys.stderr)
+        print("commit blocklist check failed; verify commit_blocklist in the settings file (--settings, or %LOCALAPPDATA%\\local-message-readers\\settings.toml), its UTF-8 file, and Git state", file=sys.stderr)
         return 1
 
 

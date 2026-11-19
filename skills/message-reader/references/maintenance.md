@@ -14,4 +14,4 @@ This command **writes to the archive**. Before importing into the real archive a
 
 ## WeChat: after a WeChat upgrade
 
-In `<repo>`, set `wechat = true` under `[smoke]` in `settings.toml`, then run `uv run pytest tests/test_wechat_smoke.py`. Without that setting, or when the key is absent, the test skips: a skip means not yet verified, so first re-initialize the key following `<repo>/AGENTS.md > Readers` and run again. If it goes red, fix the reader (`<repo>/docs/adr/0004-keep-wechat-auto-update.md`).
+Set `wechat = true` under `[smoke]` in `%LOCALAPPDATA%\local-message-readers\settings.toml` (if you still have a `settings.toml` in `<repo>`, move it there first), then run `uv run pytest tests/test_wechat_smoke.py` in `<repo>`. Without that setting, or when the key is absent, the test skips: a skip means not yet verified, so first re-initialize the key following `<repo>/AGENTS.md > Readers` and run again. If it goes red, fix the reader (`<repo>/docs/adr/0004-keep-wechat-auto-update.md`).

@@ -69,7 +69,7 @@ From another project, use `uv run --project <repo> python -m readers.backup --de
 Parameters:
 - `--archive-path <path>`: the archive SQLite file to back up (default: `archive_path` in `settings.toml`; only when that is unset, the default location of `readers.archive.get_default_archive_path()`).
 - `--dest <path>`: the folder that stores the backups (can also be set as `backup_dest` in `settings.toml`; when both are set the parameter wins, and the directory must already exist). When neither is set, the backup fails and tries to write a log entry.
-- `--settings <file>`: read the given settings file instead (default: `settings.toml` in the repo root; usage in `AGENTS.md > Settings file`). The scheduled weekly backup reads the default `settings.toml`, and the cache refresh before the backup uses the same settings.
+- `--settings <file>`: read the given settings file instead (default: `%LOCALAPPDATA%\local-message-readers\settings.toml`; usage in `AGENTS.md > Settings file`). The scheduled weekly backup reads the default `settings.toml`, and the cache refresh before the backup uses the same settings.
 - `--keep <count>`: how many weekly backups to keep (default 8).
 - `--log-path <path>`: where to write the log file.
 

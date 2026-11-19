@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 from readers.archive import Archive, get_default_archive_path
 from readers.backup import get_default_log_path
+from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.teams.download import download_message
 from readers.teams.export import import_export
@@ -28,15 +30,35 @@ from readers.teams.snapshot import (
 )
 
 
-def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, Any]:
-    """Resolve the conversation argument (by id or display name).
+def _last_time_sort_key(conv: dict[str, Any]) -> tuple[bool, float]:
+    """Order by last_time as "known instant or unknown": unknown sorts oldest, and all unknowns tie.
 
-    If the name matches several candidates, raises an ambiguity error with distinguishing details; raises a not-found error if nothing matches.
+    Only an ISO time carrying an offset is a known instant. Blank, malformed or offset-less values
+    are unknown rather than guessed, so two of them always tie and keep the ambiguity error.
+    """
+    raw = conv.get("last_time")
+    try:
+        dt = datetime.fromisoformat(raw.strip()) if isinstance(raw, str) else None
+    except ValueError:
+        dt = None
+    if dt is None or dt.tzinfo is None:
+        return (False, 0.0)
+    return (True, dt.timestamp())
+
+
+def resolve_conversation_with_alternatives(
+    archive: Archive, conversation_arg: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Resolve the conversation argument (by id or display name) and return (chosen, alternatives).
+
+    When multiple non-group conversations share the display name with distinct last_time values,
+    resolves to the newest and returns the remaining candidates newest-first.
+    Raises an ambiguity error if any candidate is a group or any candidates tie on last_time.
     """
     # 1. Exact id match first
     conv = archive.get_conversation("teams", conversation_arg)
     if conv:
-        return conv
+        return conv, []
 
     # 2. Match by name
     convs = archive.find_conversations_by_name("teams", conversation_arg)
@@ -44,7 +66,17 @@ def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, A
         raise ValueError(f"Conversation not found: '{conversation_arg}'")
 
     if len(convs) == 1:
-        return convs[0]
+        return convs[0], []
+
+    # Only same-name 1:1 chats auto-resolve; a candidate found through an old alias has a different name
+    if all(not c["is_group"] and c["name"] == conversation_arg for c in convs):
+        keyed = sorted(((_last_time_sort_key(c), c) for c in convs), key=lambda kc: kc[0], reverse=True)
+        if len({k for k, _ in keyed}) == len(keyed):
+            alternatives = [
+                {"id": c["id"], "last_time": c.get("last_time") or None}
+                for _, c in keyed[1:]
+            ]
+            return keyed[0][1], alternatives
 
     # Multiple candidates: report an ambiguity error
     details = [
@@ -55,15 +87,25 @@ def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, A
     raise ValueError(msg)
 
 
+def resolve_conversation(archive: Archive, conversation_arg: str) -> dict[str, Any]:
+    """Resolve the conversation argument (by id or display name).
+
+    If the name matches several candidates that cannot be disambiguated, raises an ambiguity error
+    with distinguishing details; raises a not-found error if nothing matches.
+    """
+    conv, _ = resolve_conversation_with_alternatives(archive, conversation_arg)
+    return conv
+
+
 def resolve_conversation_for_query(
     archive: Archive,
     conv_arg: str,
     refresh_status: str,
     refresh_error: str | None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Resolve the conversation argument; if the cache refresh failed and resolution fails, wrap it as an explicit source error."""
     try:
-        return resolve_conversation(archive, conv_arg)
+        return resolve_conversation_with_alternatives(archive, conv_arg)
     except Exception as e:
         if refresh_status == "failed":
             raise RuntimeError(f"Teams cache source error: {refresh_error}; also could not resolve conversation: {e}") from e
@@ -75,8 +117,9 @@ def _parser() -> argparse.ArgumentParser:
     sub_common = argparse.ArgumentParser(add_help=False)
     sub_common.add_argument("--archive-path", default=argparse.SUPPRESS, help="Path of the archive SQLite file")
     sub_common.add_argument("--no-refresh", action="store_true", default=argparse.SUPPRESS, help="Skip the cache refresh and query the existing archive directly")
+    sub_common.add_argument("--refresh", action="store_true", default=argparse.SUPPRESS, help="Force a cache refresh even if the last refresh was recent")
     sub_common.add_argument("--profile-dir", default=argparse.SUPPRESS, help="Teams personal profile path (takes precedence over the settings file)")
-    sub_common.add_argument("--settings", default=argparse.SUPPRESS, help="Settings file path (default: settings.toml in the repo root)")
+    sub_common.add_argument("--settings", default=argparse.SUPPRESS, help=SETTINGS_HELP)
 
     p = argparse.ArgumentParser(
         prog="teams-reader",
@@ -84,8 +127,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--archive-path", default=None, help="Path of the archive SQLite file")
     p.add_argument("--no-refresh", action="store_true", default=False, help="Skip the cache refresh and query the existing archive directly")
+    p.add_argument("--refresh", action="store_true", default=False, help="Force a cache refresh even if the last refresh was recent")
     p.add_argument("--profile-dir", default=None, help="Teams personal profile path (takes precedence over the settings file)")
-    p.add_argument("--settings", default=None, help="Settings file path (default: settings.toml in the repo root)")
+    p.add_argument("--settings", default=None, help=SETTINGS_HELP)
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -230,6 +274,59 @@ def backup_status(failures: list[str]) -> dict[str, Any]:
     }
 
 
+DEFAULT_REFRESH_MIN_INTERVAL_SECONDS = 120
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _profile_key(profile_dir: Path) -> str:
+    return os.path.normcase(str(profile_dir.resolve()))
+
+
+def _throttle_reason(archive: Archive, profile_dir: Path) -> str | None:
+    """Return a skip reason when the last clean refresh of this profile is within the interval, else None."""
+    interval = get_setting("refresh_min_interval_seconds")
+    if interval is None:
+        interval = DEFAULT_REFRESH_MIN_INTERVAL_SECONDS
+    if interval <= 0:
+        return None
+    token = archive.get_clean_refresh("teams")
+    if token is None or token[1] != _profile_key(profile_dir):
+        return None
+    elapsed = _now().timestamp() - token[0]
+    if 0 <= elapsed < interval:
+        return f"Last clean refresh was {int(elapsed)}s ago (within {interval}s interval)"
+    return None
+
+
+def _refresh_cache(archive: Archive, profile_dir: Path) -> tuple[str, str | None, list[str]]:
+    """Run one cache refresh and own all throttle bookkeeping. Returns (status, error, failures).
+
+    The throttle token is dropped when the refresh starts and, unless the refresh finished cleanly
+    (success and no per-item failures), dropped again when it ends. A refresh that raises, is killed,
+    reports failures, or fails after a concurrent clean refresh therefore never leaves a token behind.
+    """
+    archive.clear_clean_refresh("teams")
+    clean = False
+    try:
+        if not profile_dir.exists():
+            error = f"Teams personal profile not found ({profile_dir})"
+            return "failed", error, [error]
+        outcome = ingest_cache(archive, profile_dir)
+        if not outcome.success:
+            error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
+            return "failed", error, list(outcome.failures)
+        if not outcome.failures:
+            archive.set_clean_refresh("teams", _now().timestamp(), _profile_key(profile_dir))
+            clean = True
+        return "ok", None, list(outcome.failures)
+    finally:
+        if not clean:
+            archive.clear_clean_refresh("teams")
+
+
 def _profile_dir(args: argparse.Namespace) -> Path:
     override = getattr(args, "profile_dir", None)
     return Path(override) if override else get_tfl_profile_dir()
@@ -279,27 +376,25 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     profile_dir = _profile_dir(args)
     refresh_status = "ok"
     refresh_error: str | None = None
+    refresh_reason: str | None = None
 
     if getattr(args, "no_refresh", False):
         refresh_status = "skipped"
-    elif not profile_dir.exists():
-        refresh_status = "failed"
-        refresh_error = f"Teams personal profile not found ({profile_dir})"
-        failures.append(refresh_error)
+        refresh_reason = "Refresh skipped because --no-refresh was specified"
+    elif not getattr(args, "refresh", False) and (throttle_reason := _throttle_reason(archive, profile_dir)) is not None:
+        refresh_status = "skipped"
+        refresh_reason = throttle_reason
     else:
-        outcome = ingest_cache(archive, profile_dir)
-        failures.extend(outcome.failures)
-        if outcome.success:
-            refresh_status = "ok"
-        else:
-            refresh_status = "failed"
-            refresh_error = outcome.error or (outcome.failures[0] if outcome.failures else "Cache refresh failed")
+        refresh_status, refresh_error, refresh_failures = _refresh_cache(archive, profile_dir)
+        failures.extend(refresh_failures)
 
     current_up_to = archive.get_data_current_up_to("teams")
     refresh_outcome: dict[str, Any] = {
         "status": refresh_status,
         "current_up_to": current_up_to,
     }
+    if refresh_reason:
+        refresh_outcome["reason"] = refresh_reason
     if current_up_to is None:
         refresh_outcome["current_up_to_reason"] = "The Teams cache has never been synced successfully; data currency is unknown"
     if refresh_status == "failed":
@@ -312,10 +407,21 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     backup_outcome = backup_status(failures)
 
     if args.cmd == "download":
-        conv_id = (resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)['id']
-                   if args.conversation else None)
-        result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
+        alternatives: list[dict[str, Any]] = []
+        conv_id = None
+        if args.conversation:
+            conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+            conv_id = conv["id"]
+        try:
+            result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
+        except Exception as e:  # noqa: BLE001
+            if not alternatives:
+                raise
+            # The newest conversation may not hold the message: keep the candidates so the caller can retry by id
+            result = {"error": str(e)}
         result.update(refresh=refresh_outcome, backup=backup_outcome, failures=failures)
+        if alternatives:
+            result["alternatives"] = alternatives
         return result
 
     if args.cmd == "conversations":
@@ -328,7 +434,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         }
 
     if args.cmd == "messages":
-        conv = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+        conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
         msgs = archive.query_messages(
             channel="teams",
             conversation_id=conv["id"],
@@ -337,7 +443,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             start=args.start,
             end=args.end,
         )
-        return {
+        out: dict[str, Any] = {
             "conversation": {
                 "id": conv["id"],
                 "name": conv["name"],
@@ -348,11 +454,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "backup": backup_outcome,
             "failures": failures,
         }
+        if alternatives:
+            out["alternatives"] = alternatives
+        return out
 
     if args.cmd == "search":
         conv_id = None
+        alternatives = []
         if args.conversation:
-            conv = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
+            conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
             conv_id = conv["id"]
 
         msgs = archive.search_messages(
@@ -369,13 +479,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             fmt["hit_in_quote"] = m["hit_in_quote"]
             out_messages.append(fmt)
 
-        return {
+        out = {
             "keyword": args.keyword,
             "messages": out_messages,
             "refresh": refresh_outcome,
             "backup": backup_outcome,
             "failures": failures,
         }
+        if alternatives:
+            out["alternatives"] = alternatives
+        return out
 
     if args.cmd == "recent":
         msgs, truncated = archive.query_recent_messages(
@@ -399,6 +512,8 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = _parser()
     args = parser.parse_args(argv)
+    if getattr(args, "refresh", False) and getattr(args, "no_refresh", False):
+        parser.error("--refresh and --no-refresh cannot be used together")
 
     try:
         configure_settings(args.settings)

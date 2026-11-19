@@ -216,6 +216,14 @@ def test_default_refresh_passes_archive_path_after_subcommand(tmp_path: Path) ->
     assert cmd[cmd.index("--archive-path") + 1] == str(archive)
 
 
+def test_default_refresh_forces_refresh_past_throttle(tmp_path: Path) -> None:
+    """A query just before the backup must not let the throttle skip the backup's own refresh."""
+    cmd = default_refresh_command(tmp_path / "a.db")
+
+    assert "--refresh" in cmd
+    assert "--no-refresh" not in cmd
+
+
 def test_refresh_hang_times_out_instead_of_blocking() -> None:
     """A refresh that hangs is reported as failed after the time limit, so the backup can still run."""
     hanging_refresh = [sys.executable, "-c", "import time; time.sleep(30)"]

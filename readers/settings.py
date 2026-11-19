@@ -1,19 +1,26 @@
 """Locate, parse and validate the personal settings file (settings.toml).
 
 Every entry point accepts ``--settings <file>`` and calls ``configure`` with it;
-without it the repo-root ``settings.toml`` is used. A missing default file means
-"nothing configured"; a missing explicit file is an error.
+without it ``%LOCALAPPDATA%\\local-message-readers\\settings.toml`` is used. A
+missing default file means "nothing configured"; a missing explicit file is an error.
 """
 
+import os
 import tomllib
 from pathlib import Path
 
-DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings.toml"
+DEFAULT_SETTINGS_PATH = (
+    Path(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"))
+    / "local-message-readers"
+    / "settings.toml"
+)
+SETTINGS_HELP = "Settings file path (default: %%LOCALAPPDATA%%\\local-message-readers\\settings.toml)"
 _SCHEMA = {
     "archive_path": str,
     "profile_dir": str,
     "backup_dest": str,
     "teams_self_id": str,
+    "refresh_min_interval_seconds": int,
     "commit_blocklist": str,
     "commit_blocklist_public": list[str],
     "smoke": {
@@ -81,6 +88,8 @@ def load_settings(path: Path | str | None = None) -> dict:
                     )
             elif type(value) is not expected:
                 raise SettingsError(f"{path}: {full_key} must be {expected.__name__}")
+            elif expected is int and value < 0:
+                raise SettingsError(f"{path}: {full_key} must be >= 0")
 
     validate(data, _SCHEMA)
     return data
@@ -94,7 +103,7 @@ def get_setting(key: str, section: str | None = None):
     value = data.get(key)
     if isinstance(value, str):
         value = value.strip()
-    if isinstance(value, bool):
+    if isinstance(value, int):
         return value
     return value or None
 

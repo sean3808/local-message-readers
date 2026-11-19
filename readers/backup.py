@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from readers.archive import get_default_archive_path
-from readers.settings import active_settings_path, get_path_setting, load_settings
+from readers.settings import SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
 from readers.settings import configure as configure_settings
 
 __all__ = [
@@ -170,6 +170,8 @@ def default_refresh_command(archive_path: Path) -> list[str]:
         str(archive_path),
         "--limit",
         "1",
+        # The backup must see a real refresh, never a throttled skip
+        "--refresh",
     ]
     settings_file = active_settings_path()
     if settings_file is not None:
@@ -489,7 +491,7 @@ def run_backup(
             refresh_command=refresh_command,
         )
     else:
-        refresh_detail = "Backup destination is required: specify --dest or set backup_dest in settings.toml"
+        refresh_detail = "Backup destination is required: specify --dest or set backup_dest in the settings file (%LOCALAPPDATA%\\local-message-readers\\settings.toml)"
         sys.stderr.write(refresh_detail + "\n")
 
     # Step 2: Backup
@@ -643,7 +645,7 @@ def main(argv: list[str] | None = None) -> None:
         "--settings",
         type=Path,
         default=None,
-        help="Settings file (default: settings.toml in the repo root)",
+        help=SETTINGS_HELP,
     )
 
     args = parser.parse_args(argv)

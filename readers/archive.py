@@ -390,6 +390,14 @@ class Archive:
                     PRIMARY KEY (channel, source)
                 )
             """)
+            # Refresh throttle token: present only after a clean refresh of that profile (see set_clean_refresh)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS refresh_token (
+                    channel TEXT PRIMARY KEY,
+                    clean_at REAL NOT NULL,
+                    profile TEXT NOT NULL
+                )
+            """)
 
             # Migration: conversation member mri and aliases (for merging 1-to-1 conversations across sources)
             if "member_mris" not in conv_cols:
@@ -463,6 +471,29 @@ class Archive:
                 (channel,),
             ).fetchone()
             return str(row[0]) if row and row[0] else None
+
+    def clear_clean_refresh(self, channel: str) -> None:
+        """Drop the throttle token: called when a refresh starts, so only a clean finish can restore it."""
+        with closing(self._connect()) as conn:
+            conn.execute("DELETE FROM refresh_token WHERE channel = ?", (channel,))
+            conn.commit()
+
+    def set_clean_refresh(self, channel: str, clean_at: float, profile: str) -> None:
+        """Record a refresh that finished with no failures (epoch seconds, normalised profile path)."""
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO refresh_token (channel, clean_at, profile) VALUES (?, ?, ?)",
+                (channel, clean_at, profile),
+            )
+            conn.commit()
+
+    def get_clean_refresh(self, channel: str) -> tuple[float, str] | None:
+        """Return (clean_at, profile) of the last clean refresh, or None when there is no token."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT clean_at, profile FROM refresh_token WHERE channel = ?", (channel,)
+            ).fetchone()
+            return (float(row[0]), str(row[1])) if row else None
 
     def ingest_conversations(
         self,
