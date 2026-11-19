@@ -15,30 +15,34 @@ def _seed_convs(arc_path: Path, convs: list[dict], messages: list[dict] | None =
         arc.ingest_messages(channel="teams", messages=messages, source="cache")
 
 
+def _alice_pair() -> list[dict]:
+    return [
+        {
+            "id": "19:example-old@thread.v2",
+            "name": "Alice Example",
+            "is_group": False,
+            "unread": False,
+            "last_time": "2026-07-14T11:01:40+08:00",
+            "last_timestamp": 1784007700.0,
+            "version": 100.0,
+        },
+        {
+            "id": "19:example-new@thread.v2",
+            "name": "Alice Example",
+            "is_group": False,
+            "unread": False,
+            "last_time": "2026-11-19T13:22:12+08:00",
+            "last_timestamp": 1795065732.0,
+            "version": 200.0,
+        },
+    ]
+
+
 def test_messages_resolves_multiple_non_group_to_latest(tmp_path: Path) -> None:
     arc = tmp_path / "a.db"
     _seed_convs(
         arc,
-        [
-            {
-                "id": "19:example-old@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-07-14T11:01:40+08:00",
-                "last_timestamp": 1784007700.0,
-                "version": 100.0,
-            },
-            {
-                "id": "19:example-new@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-11-19T13:22:12+08:00",
-                "last_timestamp": 1795065732.0,
-                "version": 200.0,
-            },
-        ],
+        _alice_pair(),
         messages=[
             {
                 "id": "m-old",
@@ -219,25 +223,8 @@ def test_messages_single_match_and_exact_id_omit_alternatives(tmp_path: Path) ->
     arc = tmp_path / "a.db"
     _seed_convs(
         arc,
-        [
-            {
-                "id": "19:example-old@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-07-14T11:01:40+08:00",
-                "last_timestamp": 1784007700.0,
-                "version": 100.0,
-            },
-            {
-                "id": "19:example-new@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-11-19T13:22:12+08:00",
-                "last_timestamp": 1795065732.0,
-                "version": 200.0,
-            },
+        _alice_pair()
+        + [
             {
                 "id": "19:example-unique@thread.v2",
                 "name": "Unique Person",
@@ -264,26 +251,7 @@ def test_search_with_conversation_resolves_latest_non_group(tmp_path: Path) -> N
     arc = tmp_path / "a.db"
     _seed_convs(
         arc,
-        [
-            {
-                "id": "19:example-old@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-07-14T11:01:40+08:00",
-                "last_timestamp": 1784007700.0,
-                "version": 100.0,
-            },
-            {
-                "id": "19:example-new@thread.v2",
-                "name": "Alice Example",
-                "is_group": False,
-                "unread": False,
-                "last_time": "2026-11-19T13:22:12+08:00",
-                "last_timestamp": 1795065732.0,
-                "version": 200.0,
-            },
-        ],
+        _alice_pair(),
         messages=[
             {
                 "id": "m-old",

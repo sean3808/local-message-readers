@@ -78,7 +78,7 @@ Look at `refresh.status` and `refresh.current_up_to` in the JSON: they say wheth
 
 If the profile folder is not in the standard place, set `profile_dir` in `settings.toml` or pass `--profile-dir`.
 
-When looking up a conversation by display name, if multiple 1:1 chats share that name with distinct `last_time` values, `teams-reader` picks the newest one and lists the others under `alternatives` (`[{id, last_time}]`); if any candidate is a group or two tie on `last_time`, it returns an error listing each `id` so you can pick one.
+When looking up a conversation by display name, if multiple 1:1 conversations share that name with distinct `last_time` values, `teams-reader` picks the newest one and lists the others under `alternatives` (`[{id, last_time}]`); if any candidate is a group or two tie on `last_time`, it returns an error listing each `id` so you can pick one.
 
 ### 4. Teams: download attachments (first sign-in)
 

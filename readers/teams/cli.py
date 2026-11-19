@@ -360,7 +360,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             conv_id = conv["id"]
         result = download_message(archive, args.message_id, Path(args.to), conv_id, args.name)
         result.update(refresh=refresh_outcome, backup=backup_outcome, failures=failures)
-        if alternatives:
+        if alternatives and "error" not in result:
             result["alternatives"] = alternatives
         return result
 

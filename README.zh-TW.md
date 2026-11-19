@@ -78,7 +78,7 @@ uv run teams-reader conversations
 
 如果設定檔資料夾不在標準位置，在 `settings.toml` 設 `profile_dir`，或加 `--profile-dir` 參數。
 
-依顯示名稱查詢對話時，若有多個一對一聊天室同名且 `last_time` 各自不同，`teams-reader` 會自動選取最新的一個，並把其餘候選列在 `alternatives`（`[{id, last_time}]`）；若其中包含群組或有兩個 `last_time` 相同，仍會回傳錯誤並列出各個 `id` 供指定。
+依顯示名稱查詢對話時，若有多個一對一對話同名且 `last_time` 各自不同，`teams-reader` 會自動選取最新的一個，並把其餘候選列在 `alternatives`（`[{id, last_time}]`）；若其中包含群組或有兩個 `last_time` 相同，仍會回傳錯誤並列出各個 `id` 供指定。
 
 ### 4. Teams：下載附件（第一次登入）
 
