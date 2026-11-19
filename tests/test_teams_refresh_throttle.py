@@ -271,6 +271,30 @@ def test_refresh_that_raises_does_not_count_as_recent(
         )
     assert code1 != 0
     assert "cannot create temp snapshot" in out1["error"]
+    assert Archive(db_path=arc_path).get_sync_status("teams", source="cache_attempt") == "failed"
+
+
+def test_refresh_that_raises_after_concurrent_success_still_records_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A concurrent refresh writing "ok" while this one runs must not hide this run's exception."""
+    t0 = datetime(2026, 11, 19, 10, 0, 0, tzinfo=TZ)
+    arc_path, profile, settings = _seed_sync_and_settings(tmp_path, 120, t0)
+
+    def concurrent_ok_then_raise(archive: Archive, _profile_dir: Path):
+        archive.record_sync("teams", source="cache_attempt", status="ok")
+        raise OSError("cannot create temp snapshot")
+
+    with (
+        patch("readers.teams.cli.ingest_cache", side_effect=concurrent_ok_then_raise),
+        patch("readers.teams.cli._now", return_value=t0 + timedelta(seconds=10)),
+    ):
+        code, _ = _run_main(
+            "conversations", "--refresh",
+            settings_file=settings, archive_path=arc_path, profile_dir=profile, capsys=capsys,
+        )
+    assert code != 0
+    assert Archive(db_path=arc_path).get_sync_status("teams", source="cache_attempt") == "failed"
 
     with (
         patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(with_replychains=True)),

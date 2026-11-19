@@ -360,9 +360,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         refresh_error = f"Teams personal profile not found ({profile_dir})"
         failures.append(refresh_error)
     else:
-        # Mark the attempt failed first, so an exception inside ingest_cache never leaves a stale "ok"
+        # Mark the attempt failed first (covers a killed process), and again if ingest_cache raises:
+        # a concurrent refresh may have written "ok" in between, which must not hide this failure
         archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
-        outcome = ingest_cache(archive, profile_dir)
+        try:
+            outcome = ingest_cache(archive, profile_dir)
+        except BaseException:
+            archive.record_sync(channel="teams", source=_CACHE_ATTEMPT_SOURCE, status="failed")
+            raise
         failures.extend(outcome.failures)
         if outcome.success:
             refresh_status = "ok"
