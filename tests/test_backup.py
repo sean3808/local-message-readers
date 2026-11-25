@@ -234,6 +234,25 @@ def test_refresh_hang_times_out_instead_of_blocking() -> None:
     assert "timed out" in detail
 
 
+def test_refresh_prefers_stdout_json_error_over_stderr_warning() -> None:
+    """A stderr warning from the refresh child must not hide its JSON error on stdout."""
+    failing_refresh = [
+        sys.executable,
+        "-c",
+        (
+            "import json, sys; "
+            "sys.stderr.write('Warning: ignoring repository settings file\\n'); "
+            "print(json.dumps({'error': 'Profile directory not found'})); "
+            "sys.exit(1)"
+        ),
+    ]
+
+    ok, detail = run_refresh(Path("unused.db"), refresh_command=failing_refresh)
+
+    assert ok is False
+    assert "Profile directory not found" in detail
+
+
 @requires_7z
 def test_consistent_copy_wal_mode_uncommitted_write(tmp_path: Path) -> None:
     """Consistent copy: archive in WAL mode with committed rows still in the -wal file (no checkpoint)

@@ -213,7 +213,18 @@ def run_refresh(
     stderr = (proc.stderr or "").strip()
 
     if proc.returncode != 0:
-        err = stderr or stdout or f"exit code {proc.returncode}"
+        stdout_error = None
+        if stdout:
+            try:
+                parsed = json.loads(stdout)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("error"):
+                stdout_error = str(parsed["error"])
+        if stdout_error and stderr:
+            err = f"{stdout_error} (stderr: {stderr})"
+        else:
+            err = stderr or stdout or f"exit code {proc.returncode}"
         return False, f"Refresh process failed (exit code {proc.returncode}): {err}"
 
     try:

@@ -6,6 +6,7 @@ missing default file means "nothing configured"; a missing explicit file is an e
 """
 
 import os
+import sys
 import tomllib
 from pathlib import Path
 
@@ -39,6 +40,33 @@ class SettingsError(ValueError):
 
 
 _active_path: Path | None = None
+_warned_repo_settings: bool = False
+
+
+def _checkout_root() -> Path | None:
+    """Return the repository root when running from a source checkout, else None."""
+    root = Path(__file__).resolve().parents[1]
+    if (root / "pyproject.toml").is_file() and (root / ".git").exists():
+        return root
+    return None
+
+
+def _warn_if_repo_settings() -> None:
+    """Warn once per process when default settings ignore a repo-root settings.toml."""
+    global _warned_repo_settings
+    if _warned_repo_settings:
+        return
+    root = _checkout_root()
+    if root is None:
+        return
+    repo_settings = root / "settings.toml"
+    if not repo_settings.is_file():
+        return
+    _warned_repo_settings = True
+    sys.stderr.write(
+        f"Warning: ignoring repository settings file {repo_settings} (repository copy is not read); "
+        f"default settings path is {DEFAULT_SETTINGS_PATH}\n"
+    )
 
 
 def configure(path: Path | str | None) -> None:
@@ -48,6 +76,8 @@ def configure(path: Path | str | None) -> None:
     """
     global _active_path
     _active_path = Path(path) if path is not None else None
+    if _active_path is None:
+        _warn_if_repo_settings()
     load_settings()
 
 
