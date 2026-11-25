@@ -329,7 +329,14 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
             except SystemExit as exc:
                 code = exc.code
             captured = capsys.readouterr()
-            outputs[name] = (code, captured.out, captured.err)
+            out = captured.out
+            if name == "backup":
+                # The backup stamps wall-clock times; drop them so a second boundary cannot flake the comparison
+                payload = json.loads(out)
+                payload.pop("started", None)
+                payload.pop("finished", None)
+                out = json.dumps(payload, sort_keys=True)
+            outputs[name] = (code, out, captured.err)
         return outputs
 
     monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)

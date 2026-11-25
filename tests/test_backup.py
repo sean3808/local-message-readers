@@ -234,23 +234,29 @@ def test_refresh_hang_times_out_instead_of_blocking() -> None:
     assert "timed out" in detail
 
 
-def test_refresh_prefers_stdout_json_error_over_stderr_warning() -> None:
-    """A stderr warning from the refresh child must not hide its JSON error on stdout."""
-    failing_refresh = [
-        sys.executable,
-        "-c",
-        (
-            "import json, sys; "
-            "sys.stderr.write('Warning: ignoring repository settings file\\n'); "
-            "print(json.dumps({'error': 'Profile directory not found'})); "
-            "sys.exit(1)"
-        ),
-    ]
+def test_refresh_detail_is_unchanged_by_a_stderr_warning() -> None:
+    """A stderr warning from the refresh child must not change the backup's refresh detail."""
 
-    ok, detail = run_refresh(Path("unused.db"), refresh_command=failing_refresh)
+    def failing_refresh(stderr_text: str) -> list[str]:
+        return [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys; "
+                f"sys.stderr.write({stderr_text!r}); "
+                "print(json.dumps({'error': 'Profile directory not found'})); "
+                "sys.exit(1)"
+            ),
+        ]
 
-    assert ok is False
-    assert "Profile directory not found" in detail
+    ok_plain, detail_plain = run_refresh(Path("unused.db"), refresh_command=failing_refresh(""))
+    ok_warned, detail_warned = run_refresh(
+        Path("unused.db"), refresh_command=failing_refresh("Warning: ignoring repository settings file\n")
+    )
+
+    assert ok_plain is False and ok_warned is False
+    assert "Profile directory not found" in detail_plain
+    assert detail_warned == detail_plain
 
 
 @requires_7z

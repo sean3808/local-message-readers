@@ -180,15 +180,13 @@ def default_refresh_command(archive_path: Path) -> list[str]:
     return command
 
 
-def _json_error(stdout: str) -> str | None:
-    """The ``error`` text of a JSON object printed on stdout, or None when there is none."""
+def _has_json_error(stdout: str) -> bool:
+    """True when stdout is a JSON object carrying an ``error``: the reader's own failure report."""
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError:
-        return None
-    if isinstance(parsed, dict) and parsed.get("error"):
-        return str(parsed["error"])
-    return None
+        return False
+    return isinstance(parsed, dict) and bool(parsed.get("error"))
 
 
 def run_refresh(
@@ -224,11 +222,9 @@ def run_refresh(
     stderr = (proc.stderr or "").strip()
 
     if proc.returncode != 0:
-        stdout_error = _json_error(stdout)
-        if stdout_error and stderr:
-            err = f"{stdout_error} (stderr: {stderr})"
-        else:
-            err = stderr or stdout or f"exit code {proc.returncode}"
+        # The reader's JSON error on stdout wins over stderr noise such as the repository
+        # settings warning, so the backup's own stdout JSON does not change with it
+        err = stdout if _has_json_error(stdout) else (stderr or stdout or f"exit code {proc.returncode}")
         return False, f"Refresh process failed (exit code {proc.returncode}): {err}"
 
     try:
