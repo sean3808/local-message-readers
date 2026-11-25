@@ -210,12 +210,19 @@ def test_refresh_min_interval_seconds_preserves_zero(tmp_path):
     assert get_setting("refresh_min_interval_seconds") == 45
 
 
-def test_repo_settings_warning_default_with_repo_file_warns_once(tmp_path, monkeypatch, capsys):
+def _setup_repo_checkout(tmp_path: Path, monkeypatch, with_settings: bool = True) -> Path:
     checkout = tmp_path / "repo"
-    checkout.mkdir()
-    repo_settings = checkout / "settings.toml"
-    repo_settings.write_text('teams_self_id = "8:ignored"\n', encoding="utf-8")
+    checkout.mkdir(exist_ok=True)
+    if with_settings:
+        repo_settings = checkout / "settings.toml"
+        repo_settings.write_text('teams_self_id = "8:ignored"\n', encoding="utf-8")
     monkeypatch.setattr(settings_module, "_checkout_root", lambda: checkout)
+    return checkout
+
+
+def test_repo_settings_warning_default_with_repo_file_warns_once(tmp_path, monkeypatch, capsys):
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+    repo_settings = checkout / "settings.toml"
 
     configure(None)
     load_settings()
@@ -231,9 +238,7 @@ def test_repo_settings_warning_default_with_repo_file_warns_once(tmp_path, monke
 
 
 def test_repo_settings_warning_default_without_repo_file_is_silent(tmp_path, monkeypatch, capsys):
-    checkout = tmp_path / "repo"
-    checkout.mkdir()
-    monkeypatch.setattr(settings_module, "_checkout_root", lambda: checkout)
+    _setup_repo_checkout(tmp_path, monkeypatch, with_settings=False)
 
     configure(None)
     captured = capsys.readouterr()
@@ -241,10 +246,7 @@ def test_repo_settings_warning_default_without_repo_file_is_silent(tmp_path, mon
 
 
 def test_repo_settings_warning_suppressed_with_explicit_settings(tmp_path, monkeypatch, capsys):
-    checkout = tmp_path / "repo"
-    checkout.mkdir()
-    (checkout / "settings.toml").write_text('teams_self_id = "8:ignored"\n', encoding="utf-8")
-    monkeypatch.setattr(settings_module, "_checkout_root", lambda: checkout)
+    _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
 
     explicit = write(tmp_path, 'teams_self_id = "8:explicit"\n')
     configure(explicit)
@@ -299,23 +301,34 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
     blocklist_main = _load_blocklist_main()
     archive = tmp_path / "archive.db"
     Archive(archive)
+    missing_profile = tmp_path / "missing-profile"
+    missing_dest = tmp_path / "missing-dest"
+
+    fake_wechat_payload = {"conversations": [{"id": "wxid_fictional", "name": "Fictional"}]}
+    monkeypatch.setattr("readers.wechat.AppContext", lambda: object())
+    monkeypatch.setattr("readers.wechat.list_conversations", lambda app, limit: fake_wechat_payload)
+    monkeypatch.setattr("readers.backup.run_refresh", lambda *a, **kw: (True, "ok"))
 
     def run_all():
         outputs = {}
 
         settings_module._warned_repo_settings = False
-        teams_code = teams_main(["--no-refresh", "--archive-path", str(archive), "conversations"])
+        teams_code = teams_main(
+            ["--no-refresh", "--archive-path", str(archive), "--profile-dir", str(missing_profile), "conversations"]
+        )
         teams_cap = capsys.readouterr()
         outputs["teams"] = (teams_code, teams_cap.out, teams_cap.err)
 
         settings_module._warned_repo_settings = False
-        wechat_code = wechat_main(["conversations", "--limit", "0"])
+        wechat_code = wechat_main(["conversations"])
         wechat_cap = capsys.readouterr()
         outputs["wechat"] = (wechat_code, wechat_cap.out, wechat_cap.err)
 
         settings_module._warned_repo_settings = False
         with pytest.raises(SystemExit) as backup_exc:
-            backup_main(["--log-path", str(tmp_path / "log.jsonl")])
+            backup_main(
+                ["--archive-path", str(archive), "--dest", str(missing_dest), "--log-path", str(tmp_path / "log.jsonl")]
+            )
         backup_cap = capsys.readouterr()
         outputs["backup"] = (backup_exc.value.code, backup_cap.out, backup_cap.err)
 
@@ -329,11 +342,8 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
     monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)
     baseline = run_all()
 
-    checkout = tmp_path / "repo"
-    checkout.mkdir()
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
     repo_settings = checkout / "settings.toml"
-    repo_settings.write_text('teams_self_id = "8:ignored"\n', encoding="utf-8")
-    monkeypatch.setattr(settings_module, "_checkout_root", lambda: checkout)
     with_warning = run_all()
 
     for name in ("teams", "wechat", "backup", "blocklist"):
@@ -343,5 +353,7 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
         assert warn_out == base_out
         assert str(repo_settings) in warn_err
         assert str(settings_module.DEFAULT_SETTINGS_PATH) in warn_err
-        if name in ("teams", "wechat"):
-            json.loads(warn_out)
+        if name in ("teams", "wechat", "backup"):
+            parsed = json.loads(warn_out)
+            if name == "wechat":
+                assert parsed == fake_wechat_payload
