@@ -359,7 +359,7 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
             out = captured.out
             if name == "backup":
                 # The backup stamps wall-clock times; drop them so a second boundary cannot flake the comparison
-                out = re.sub(r'"(started|finished)"\s*:\s*"[^"]*"', r'"\1": ""', out)
+                out = re.sub(r'("(?:started|finished)"\s*:\s*")[^"]*"', r'\1"', out)
             outputs[name] = (code, out, captured.err)
         return outputs
 
