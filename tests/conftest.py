@@ -16,12 +16,16 @@ import readers.settings as settings_module
 
 # Resolved before the autouse fixture replaces it; only the real-data smoke tests read this file.
 REAL_SETTINGS_PATH = settings_module.DEFAULT_SETTINGS_PATH
+REAL_CHECKOUT_ROOT = settings_module._checkout_root
 
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path_factory, monkeypatch):
     missing = tmp_path_factory.mktemp("no-settings") / "settings.toml"
+    empty_checkout = tmp_path_factory.mktemp("no-checkout-settings")
     monkeypatch.setattr(settings_module, "DEFAULT_SETTINGS_PATH", missing)
+    monkeypatch.setattr(settings_module, "_checkout_root", lambda: empty_checkout)
+    monkeypatch.setattr(settings_module, "_warned_repo_settings", False)
     settings_module.configure(None)
     yield
     settings_module.configure(None)
