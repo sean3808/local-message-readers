@@ -436,7 +436,7 @@ def test_ingest_cache_edited_deleted_or_quoted_confirmed_copy_never_ingests_minu
             "imDisplayName": "Alice",
             "messageType": "RichText/Html",
             "content": '<blockquote itemtype="http://schema.skype.com/Reply">quote</blockquote><p>edited text</p>',
-            "skypeeditedid": "1795500734000",
+            "properties": {"edittime": "1795500735000"},
         },
         "p_deleted": {
             "id": "-1",
@@ -467,6 +467,13 @@ def test_ingest_cache_edited_deleted_or_quoted_confirmed_copy_never_ingests_minu
                 r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE conversation_id = ?", (conv_id,)).fetchall()
             )
             assert ids == ["1795500734000", "1795500736000"]
+        flags = {
+            r[0]: (r[1], r[2])
+            for r in conn.execute("SELECT id, edited, deleted FROM messages WHERE conversation_id = ?", (conv_id,))
+        }
+    # The fixture must really exercise the edited and deleted states the issue names.
+    assert flags["1795500734000"][0] == 1
+    assert flags["1795500736000"][1] == 1
 
 
 
