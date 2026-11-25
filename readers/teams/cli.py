@@ -19,6 +19,7 @@ from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.teams.download import download_message
 from readers.teams.export import import_export
+from readers.teams.placeholder import clean_placeholder_messages
 from readers.teams.reconcile import reconcile_export
 from readers.teams.repair import repair_fffd
 from readers.teams.system_text import migrate_system_text
@@ -203,6 +204,10 @@ def _parser() -> argparse.ArgumentParser:
     mig = sub.add_parser("migrate-system-text", parents=[sub_common], help="One-time rewrite of old Chinese system-event texts to English")
     mig.description = "One-time rewrite of archived Chinese system-event texts (#39) to the English text; previews by default, use --write to apply."
     mig.add_argument("--write", action="store_true", help="Actually write the migration result")
+
+    clean = sub.add_parser("clean-placeholder-messages", parents=[sub_common], help="One-time removal of archived cache placeholder messages (id -1)")
+    clean.description = "One-time removal of cache-only placeholder messages (id -1); previews by default, use --write to apply."
+    clean.add_argument("--write", action="store_true", help="Actually delete the placeholder messages")
     return p
 
 
@@ -366,6 +371,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.cmd == "migrate-system-text":
         return migrate_system_text(_open_one_shot_archive(args, failures), write=args.write)
+
+    if args.cmd == "clean-placeholder-messages":
+        return clean_placeholder_messages(_open_one_shot_archive(args, failures), write=args.write)
 
     archive = (Archive.open_read_only(args.archive_path) if args.cmd == "download" and args.no_refresh
                else Archive(db_path=args.archive_path))
