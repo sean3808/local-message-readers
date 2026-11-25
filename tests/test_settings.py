@@ -307,7 +307,18 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
     fake_wechat_payload = {"conversations": [{"id": "wxid_fictional", "name": "Fictional"}]}
     monkeypatch.setattr("readers.wechat.AppContext", lambda: object())
     monkeypatch.setattr("readers.wechat.list_conversations", lambda app, limit: fake_wechat_payload)
-    monkeypatch.setattr("readers.backup.run_refresh", lambda *a, **kw: (True, "ok"))
+    # A fictional refresh child that fails with a JSON error on stdout; its stderr is set per run below.
+    child_stderr = {"text": ""}
+    monkeypatch.setattr(
+        "readers.backup.default_refresh_command",
+        lambda archive_path: [
+            sys.executable,
+            "-c",
+            "import json, sys; "
+            f"sys.stderr.write({child_stderr['text']!r}); "
+            "print(json.dumps({'error': 'Fictional profile not found'})); sys.exit(1)",
+        ],
+    )
 
     entry_points = {
         "teams": lambda: teams_main(
@@ -344,7 +355,9 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
 
     checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
     repo_settings = checkout / "settings.toml"
+    child_stderr["text"] = f"Warning: ignoring repository settings file {repo_settings}\n"
     with_warning = run_all()
+    assert "Fictional profile not found" in json.loads(with_warning["backup"][1])["refresh"]["detail"]
 
     for name in ("teams", "wechat", "backup", "blocklist"):
         base_code, base_out, _ = baseline[name]
