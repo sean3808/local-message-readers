@@ -79,7 +79,11 @@ def _load_latest_store_records(
     failed_keys: set[Any] | None = None,
 ) -> dict[Any, Any]:
     """Read all records of a store and return {key: latest record} (the one with the largest ldb_seq_no wins)."""
-    latest_records: dict[Any, Any] = {}
+    # Track (ldb_seq_no, record_or_None) across both real dicts and empty placeholders so a newer
+    # placeholder evicts an older dict regardless of iteration order. When seq is None, preserve
+    # existing behavior: it is stored if the key is unseen, never overwrites a seen key, and does
+    # not crash when compared against a sequenced record.
+    latest_entries: dict[Any, tuple[Any, Any | None]] = {}
 
     def _note_failed_key(key: Any) -> None:
         if failed_keys is None:
@@ -104,12 +108,15 @@ def _load_latest_store_records(
         try:
             k = _plain_key(r.key.value)
             seq = getattr(r, "ldb_seq_no", None)
-            if _is_empty_placeholder(k, r.value):
-                continue
-            if r.value is None or not isinstance(r.value, dict):
+            is_placeholder = _is_empty_placeholder(k, r.value)
+            if not is_placeholder and (r.value is None or not isinstance(r.value, dict)):
                 raise ValueError("Record content is empty or not a valid dict")
-            if k not in latest_records or (seq is not None and seq > latest_records[k].ldb_seq_no):
-                latest_records[k] = r
+            if k not in latest_entries:
+                latest_entries[k] = (seq, None if is_placeholder else r)
+            else:
+                best_seq, _ = latest_entries[k]
+                if seq is not None and (best_seq is None or seq > best_seq):
+                    latest_entries[k] = (seq, None if is_placeholder else r)
         except Exception as e:  # noqa: BLE001
             _note_failed_key(getattr(r, "key", None))
             seq_str = str(getattr(r, "ldb_seq_no", "unknown"))
@@ -117,7 +124,7 @@ def _load_latest_store_records(
             if failures is not None:
                 failures.append(f"Could not parse record: store='{store_name}', key='{k_str}', seq={seq_str}: {e}")
 
-    return latest_records
+    return {k: rec for k, (_, rec) in latest_entries.items() if rec is not None}
 
 
 def _load_latest_records(
@@ -208,6 +215,8 @@ def _normalize_replychains(
             try:
                 if not isinstance(m, dict):
                     raise TypeError("Message record is not a dict")
+                if str(m.get("id") or "").strip() == "-1":
+                    continue
                 degraded: list[str] = []
                 messages.append(normalize_teams_message(m, conv_id, float(seq), degraded, self_id=self_id))
                 for fld in degraded if report_degraded else ():
