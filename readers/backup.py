@@ -180,6 +180,17 @@ def default_refresh_command(archive_path: Path) -> list[str]:
     return command
 
 
+def _json_error(stdout: str) -> str | None:
+    """The ``error`` text of a JSON object printed on stdout, or None when there is none."""
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return str(parsed["error"])
+    return None
+
+
 def run_refresh(
     archive_path: Path,
     refresh_command: list[str] | None = None,
@@ -213,14 +224,7 @@ def run_refresh(
     stderr = (proc.stderr or "").strip()
 
     if proc.returncode != 0:
-        stdout_error = None
-        if stdout:
-            try:
-                parsed = json.loads(stdout)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, dict) and parsed.get("error"):
-                stdout_error = str(parsed["error"])
+        stdout_error = _json_error(stdout)
         if stdout_error and stderr:
             err = f"{stdout_error} (stderr: {stderr})"
         else:

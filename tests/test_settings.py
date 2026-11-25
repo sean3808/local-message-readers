@@ -309,34 +309,27 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
     monkeypatch.setattr("readers.wechat.list_conversations", lambda app, limit: fake_wechat_payload)
     monkeypatch.setattr("readers.backup.run_refresh", lambda *a, **kw: (True, "ok"))
 
+    entry_points = {
+        "teams": lambda: teams_main(
+            ["--no-refresh", "--archive-path", str(archive), "--profile-dir", str(missing_profile), "conversations"]
+        ),
+        "wechat": lambda: wechat_main(["conversations"]),
+        "backup": lambda: backup_main(
+            ["--archive-path", str(archive), "--dest", str(missing_dest), "--log-path", str(tmp_path / "log.jsonl")]
+        ),
+        "blocklist": lambda: blocklist_main([]),
+    }
+
     def run_all():
         outputs = {}
-
-        settings_module._warned_repo_settings = False
-        teams_code = teams_main(
-            ["--no-refresh", "--archive-path", str(archive), "--profile-dir", str(missing_profile), "conversations"]
-        )
-        teams_cap = capsys.readouterr()
-        outputs["teams"] = (teams_code, teams_cap.out, teams_cap.err)
-
-        settings_module._warned_repo_settings = False
-        wechat_code = wechat_main(["conversations"])
-        wechat_cap = capsys.readouterr()
-        outputs["wechat"] = (wechat_code, wechat_cap.out, wechat_cap.err)
-
-        settings_module._warned_repo_settings = False
-        with pytest.raises(SystemExit) as backup_exc:
-            backup_main(
-                ["--archive-path", str(archive), "--dest", str(missing_dest), "--log-path", str(tmp_path / "log.jsonl")]
-            )
-        backup_cap = capsys.readouterr()
-        outputs["backup"] = (backup_exc.value.code, backup_cap.out, backup_cap.err)
-
-        settings_module._warned_repo_settings = False
-        blocklist_code = blocklist_main([])
-        blocklist_cap = capsys.readouterr()
-        outputs["blocklist"] = (blocklist_code, blocklist_cap.out, blocklist_cap.err)
-
+        for name, call in entry_points.items():
+            monkeypatch.setattr(settings_module, "_warned_repo_settings", False)
+            try:
+                code = call()
+            except SystemExit as exc:
+                code = exc.code
+            captured = capsys.readouterr()
+            outputs[name] = (code, captured.out, captured.err)
         return outputs
 
     monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)
@@ -353,7 +346,6 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
         assert warn_out == base_out
         assert str(repo_settings) in warn_err
         assert str(settings_module.DEFAULT_SETTINGS_PATH) in warn_err
-        if name in ("teams", "wechat", "backup"):
-            parsed = json.loads(warn_out)
-            if name == "wechat":
-                assert parsed == fake_wechat_payload
+    for name in ("teams", "backup"):
+        json.loads(with_warning[name][1])
+    assert json.loads(with_warning["wechat"][1]) == fake_wechat_payload
