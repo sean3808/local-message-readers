@@ -346,7 +346,7 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
                 payload = json.loads(out)
                 payload.pop("started", None)
                 payload.pop("finished", None)
-                out = json.dumps(payload, sort_keys=True)
+                out = json.dumps(payload)
             outputs[name] = (code, out, captured.err)
         return outputs
 

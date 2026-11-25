@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from readers.archive import get_default_archive_path
-from readers.settings import SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
+from readers.settings import REPO_SETTINGS_WARNING_PREFIX, SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
 from readers.settings import configure as configure_settings
 
 __all__ = [
@@ -222,9 +222,15 @@ def run_refresh(
     stderr = (proc.stderr or "").strip()
 
     if proc.returncode != 0:
-        # The reader's JSON error on stdout wins over stderr noise such as the repository
-        # settings warning, so the backup's own stdout JSON does not change with it
-        err = stdout if _has_json_error(stdout) else (stderr or stdout or f"exit code {proc.returncode}")
+        # The child's repository settings warning is not a diagnostic: leaving it out keeps the
+        # backup's own stdout JSON the same with and without a stale settings.toml
+        stderr = "\n".join(
+            line for line in stderr.splitlines() if not line.startswith(REPO_SETTINGS_WARNING_PREFIX)
+        ).strip()
+        if _has_json_error(stdout):
+            err = f"{stdout} (stderr: {stderr})" if stderr else stdout
+        else:
+            err = stderr or stdout or f"exit code {proc.returncode}"
         return False, f"Refresh process failed (exit code {proc.returncode}): {err}"
 
     try:

@@ -39,6 +39,7 @@ class SettingsError(ValueError):
     """Settings file missing, malformed, or holding an unknown key or wrong type."""
 
 
+REPO_SETTINGS_WARNING_PREFIX = "Warning: ignoring repository settings file"
 _active_path: Path | None = None
 _warned_repo_settings: bool = False
 
@@ -64,7 +65,7 @@ def _warn_if_repo_settings() -> None:
         return
     _warned_repo_settings = True
     sys.stderr.write(
-        f"Warning: ignoring repository settings file {repo_settings} (repository copy is not read); "
+        f"{REPO_SETTINGS_WARNING_PREFIX} {repo_settings} (repository copy is not read); "
         f"default settings path is {DEFAULT_SETTINGS_PATH}\n"
     )
 

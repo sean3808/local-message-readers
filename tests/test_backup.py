@@ -254,9 +254,29 @@ def test_refresh_detail_is_unchanged_by_a_stderr_warning() -> None:
         Path("unused.db"), refresh_command=failing_refresh("Warning: ignoring repository settings file\n")
     )
 
-    assert ok_plain is False and ok_warned is False
+    ok_diag, detail_diag = run_refresh(
+        Path("unused.db"),
+        refresh_command=failing_refresh("Warning: ignoring repository settings file X\nPermission denied opening profile.lock\n"),
+    )
+
+    assert ok_plain is False and ok_warned is False and ok_diag is False
     assert "Profile directory not found" in detail_plain
     assert detail_warned == detail_plain
+    # A real diagnostic on stderr is kept; only the settings warning line is left out
+    assert "Permission denied opening profile.lock" in detail_diag
+    assert "repository settings file" not in detail_diag
+
+
+def test_refresh_detail_without_json_error_leaves_out_the_settings_warning() -> None:
+    traceback_child = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('Warning: ignoring repository settings file X\\nboom\\n'); sys.exit(1)",
+    ]
+
+    _, detail = run_refresh(Path("unused.db"), refresh_command=traceback_child)
+
+    assert detail.endswith(": boom")
 
 
 @requires_7z
