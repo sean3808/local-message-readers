@@ -111,12 +111,9 @@ def _load_latest_store_records(
             is_placeholder = _is_empty_placeholder(k, r.value)
             if not is_placeholder and (r.value is None or not isinstance(r.value, dict)):
                 raise ValueError("Record content is empty or not a valid dict")
-            if k not in latest_entries:
+            seen = latest_entries.get(k)
+            if seen is None or (seq is not None and (seen[0] is None or seq > seen[0])):
                 latest_entries[k] = (seq, None if is_placeholder else r)
-            else:
-                best_seq, _ = latest_entries[k]
-                if seq is not None and (best_seq is None or seq > best_seq):
-                    latest_entries[k] = (seq, None if is_placeholder else r)
         except Exception as e:  # noqa: BLE001
             _note_failed_key(getattr(r, "key", None))
             seq_str = str(getattr(r, "ldb_seq_no", "unknown"))
