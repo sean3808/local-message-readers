@@ -61,7 +61,11 @@ def _warn_if_repo_settings() -> None:
     if root is None:
         return
     repo_settings = root / "settings.toml"
-    if not repo_settings.is_file():
+    try:
+        if not repo_settings.is_file():
+            return
+    except OSError:
+        # An unreadable probe target must never keep the entry point from loading its real settings
         return
     _warned_repo_settings = True
     sys.stderr.write(

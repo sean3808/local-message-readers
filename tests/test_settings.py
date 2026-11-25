@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -254,6 +255,21 @@ def test_repo_settings_warning_suppressed_with_explicit_settings(tmp_path, monke
     assert captured.err == ""
 
 
+def test_repo_settings_probe_failure_does_not_stop_settings_loading(tmp_path, monkeypatch, capsys):
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+    real_is_file = Path.is_file
+
+    def is_file(self):
+        if self == checkout / "settings.toml":
+            raise PermissionError("cannot inspect")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+
+    configure(None)  # must not raise
+    assert capsys.readouterr().err == ""
+
+
 def test_repo_settings_warning_silent_outside_checkout(monkeypatch, capsys):
     monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)
 
@@ -343,10 +359,7 @@ def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path,
             out = captured.out
             if name == "backup":
                 # The backup stamps wall-clock times; drop them so a second boundary cannot flake the comparison
-                payload = json.loads(out)
-                payload.pop("started", None)
-                payload.pop("finished", None)
-                out = json.dumps(payload)
+                out = re.sub(r'"(started|finished)"\s*:\s*"[^"]*"', r'"\1": ""', out)
             outputs[name] = (code, out, captured.err)
         return outputs
 

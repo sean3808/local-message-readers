@@ -180,15 +180,6 @@ def default_refresh_command(archive_path: Path) -> list[str]:
     return command
 
 
-def _has_json_error(stdout: str) -> bool:
-    """True when stdout is a JSON object carrying an ``error``: the reader's own failure report."""
-    try:
-        parsed = json.loads(stdout)
-    except json.JSONDecodeError:
-        return False
-    return isinstance(parsed, dict) and bool(parsed.get("error"))
-
-
 def run_refresh(
     archive_path: Path,
     refresh_command: list[str] | None = None,
@@ -227,10 +218,7 @@ def run_refresh(
         stderr = "\n".join(
             line for line in stderr.splitlines() if not line.startswith(REPO_SETTINGS_WARNING_PREFIX)
         ).strip()
-        if _has_json_error(stdout):
-            err = f"{stdout} (stderr: {stderr})" if stderr else stdout
-        else:
-            err = stderr or stdout or f"exit code {proc.returncode}"
+        err = stderr or stdout or f"exit code {proc.returncode}"
         return False, f"Refresh process failed (exit code {proc.returncode}): {err}"
 
     try:
