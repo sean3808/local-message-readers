@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from readers.archive import get_default_archive_path
-from readers.settings import SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
+from readers.settings import REPO_SETTINGS_WARNING_PREFIX, SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
 from readers.settings import configure as configure_settings
 
 __all__ = [
@@ -213,6 +213,11 @@ def run_refresh(
     stderr = (proc.stderr or "").strip()
 
     if proc.returncode != 0:
+        # The child's repository settings warning is not a diagnostic: leaving it out keeps the
+        # backup's own stdout JSON the same with and without a stale settings.toml
+        stderr = "\n".join(
+            line for line in stderr.splitlines() if not line.startswith(REPO_SETTINGS_WARNING_PREFIX)
+        ).strip()
         err = stderr or stdout or f"exit code {proc.returncode}"
         return False, f"Refresh process failed (exit code {proc.returncode}): {err}"
 

@@ -198,6 +198,66 @@ class Archive:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def placeholder_candidates(self, channel: str, message_id: str = "-1") -> list[dict[str, Any]]:
+        """Return conversation_id and sources for archived messages matching the placeholder id."""
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT conversation_id, sources FROM messages WHERE channel = ? AND id = ? ORDER BY conversation_id",
+                (channel, message_id),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_placeholder_messages(
+        self,
+        channel: str,
+        conversation_ids: list[str],
+        message_id: str = "-1",
+    ) -> int:
+        """Atomically delete cache-only placeholder rows from messages and cache_messages and recalculate conversation last-message times."""
+        if not conversation_ids:
+            return 0
+        with closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for conversation_id in conversation_ids:
+                key = (channel, conversation_id, message_id)
+                row = conn.execute(
+                    "SELECT sources FROM messages WHERE channel = ? AND conversation_id = ? AND id = ?",
+                    key,
+                ).fetchone()
+                if row is None or _load_sources(row["sources"]) != ["cache"]:
+                    raise RuntimeError("archive message sources changed; placeholder cleanup cancelled")
+                conn.execute(
+                    "DELETE FROM messages WHERE channel = ? AND conversation_id = ? AND id = ?",
+                    key,
+                )
+                conn.execute(
+                    "DELETE FROM cache_messages WHERE channel = ? AND conversation_id = ? AND id = ?",
+                    key,
+                )
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET (last_message_time, last_message_timestamp) = (
+                        SELECT m.time, m.timestamp FROM messages m
+                        WHERE m.channel = conversations.channel AND m.conversation_id = conversations.id
+                        ORDER BY m.timestamp DESC, m.id DESC LIMIT 1
+                    )
+                    WHERE channel = ? AND id = ?
+                      AND EXISTS (SELECT 1 FROM messages m WHERE m.channel = conversations.channel AND m.conversation_id = conversations.id)
+                    """,
+                    (channel, conversation_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE conversations
+                    SET last_message_time = '', last_message_timestamp = 0
+                    WHERE channel = ? AND id = ?
+                      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.channel = conversations.channel AND m.conversation_id = conversations.id)
+                    """,
+                    (channel, conversation_id),
+                )
+        return len(conversation_ids)
+
     def repair_texts(
         self,
         channel: str,

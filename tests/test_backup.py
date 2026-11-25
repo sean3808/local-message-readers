@@ -234,6 +234,51 @@ def test_refresh_hang_times_out_instead_of_blocking() -> None:
     assert "timed out" in detail
 
 
+def test_refresh_detail_is_unchanged_by_a_stderr_warning() -> None:
+    """A stderr warning from the refresh child must not change the backup's refresh detail."""
+
+    def failing_refresh(stderr_text: str) -> list[str]:
+        return [
+            sys.executable,
+            "-c",
+            (
+                "import json, sys; "
+                f"sys.stderr.write({stderr_text!r}); "
+                "print(json.dumps({'error': 'Profile directory not found'})); "
+                "sys.exit(1)"
+            ),
+        ]
+
+    ok_plain, detail_plain = run_refresh(Path("unused.db"), refresh_command=failing_refresh(""))
+    ok_warned, detail_warned = run_refresh(
+        Path("unused.db"), refresh_command=failing_refresh("Warning: ignoring repository settings file\n")
+    )
+
+    ok_diag, detail_diag = run_refresh(
+        Path("unused.db"),
+        refresh_command=failing_refresh("Warning: ignoring repository settings file X\nPermission denied opening profile.lock\n"),
+    )
+
+    assert ok_plain is False and ok_warned is False and ok_diag is False
+    assert "Profile directory not found" in detail_plain
+    assert detail_warned == detail_plain
+    # A real diagnostic on stderr is kept; only the settings warning line is left out
+    assert "Permission denied opening profile.lock" in detail_diag
+    assert "repository settings file" not in detail_diag
+
+
+def test_refresh_detail_without_json_error_leaves_out_the_settings_warning() -> None:
+    traceback_child = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('Warning: ignoring repository settings file X\\nboom\\n'); sys.exit(1)",
+    ]
+
+    _, detail = run_refresh(Path("unused.db"), refresh_command=traceback_child)
+
+    assert detail.endswith(": boom")
+
+
 @requires_7z
 def test_consistent_copy_wal_mode_uncommitted_write(tmp_path: Path) -> None:
     """Consistent copy: archive in WAL mode with committed rows still in the -wal file (no checkpoint)

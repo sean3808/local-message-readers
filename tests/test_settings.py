@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -208,3 +209,176 @@ def test_refresh_min_interval_seconds_preserves_zero(tmp_path):
     positive_file = write(tmp_path, "refresh_min_interval_seconds = 45\n")
     configure(positive_file)
     assert get_setting("refresh_min_interval_seconds") == 45
+
+
+def _setup_repo_checkout(tmp_path: Path, monkeypatch, with_settings: bool = True) -> Path:
+    checkout = tmp_path / "repo"
+    checkout.mkdir(exist_ok=True)
+    if with_settings:
+        repo_settings = checkout / "settings.toml"
+        repo_settings.write_text('teams_self_id = "8:ignored"\n', encoding="utf-8")
+    monkeypatch.setattr(settings_module, "_checkout_root", lambda: checkout)
+    return checkout
+
+
+def test_repo_settings_warning_default_with_repo_file_warns_once(tmp_path, monkeypatch, capsys):
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+    repo_settings = checkout / "settings.toml"
+
+    configure(None)
+    load_settings()
+    get_setting("teams_self_id")
+    configure(None)
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("Warning:") == 1
+    assert str(repo_settings) in captured.err
+    assert str(settings_module.DEFAULT_SETTINGS_PATH) in captured.err
+    assert "not read" in captured.err.lower()
+
+
+def test_repo_settings_warning_default_without_repo_file_is_silent(tmp_path, monkeypatch, capsys):
+    _setup_repo_checkout(tmp_path, monkeypatch, with_settings=False)
+
+    configure(None)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_repo_settings_warning_suppressed_with_explicit_settings(tmp_path, monkeypatch, capsys):
+    _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+
+    explicit = write(tmp_path, 'teams_self_id = "8:explicit"\n')
+    configure(explicit)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_repo_settings_probe_failure_does_not_stop_settings_loading(tmp_path, monkeypatch, capsys):
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+    real_is_file = Path.is_file
+
+    def is_file(self):
+        if self == checkout / "settings.toml":
+            raise PermissionError("cannot inspect")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+
+    configure(None)  # must not raise
+    assert capsys.readouterr().err == ""
+
+
+def test_repo_settings_warning_silent_outside_checkout(monkeypatch, capsys):
+    monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)
+
+    configure(None)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
+def test_checkout_root_detects_git_dir_and_worktree_file(tmp_path, monkeypatch):
+    import conftest
+
+    monkeypatch.setattr(settings_module, "_checkout_root", conftest.REAL_CHECKOUT_ROOT)
+    fake_pkg = tmp_path / "repo" / "readers"
+    fake_pkg.mkdir(parents=True)
+    fake_file = fake_pkg / "settings.py"
+    fake_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(settings_module, "__file__", str(fake_file))
+
+    # Neither pyproject.toml nor .git -> None (installed snapshot)
+    assert settings_module._checkout_root() is None
+
+    # pyproject.toml + .git file (worktree) -> repo root
+    (tmp_path / "repo" / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    (tmp_path / "repo" / ".git").write_text("gitdir: /some/path\n", encoding="utf-8")
+    assert settings_module._checkout_root() == tmp_path / "repo"
+
+
+def _load_blocklist_main():
+    import importlib.util
+
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "check_commit_blocklist.py"
+    spec = importlib.util.spec_from_file_location("check_commit_blocklist", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main
+
+
+def test_entry_points_keep_stdout_unchanged_with_repo_settings_warning(tmp_path, monkeypatch, capsys):
+    from readers.archive import Archive
+    from readers.backup import main as backup_main
+    from readers.teams.cli import main as teams_main
+    from readers.wechat import main as wechat_main
+
+    blocklist_main = _load_blocklist_main()
+    archive = tmp_path / "archive.db"
+    Archive(archive)
+    missing_profile = tmp_path / "missing-profile"
+    missing_dest = tmp_path / "missing-dest"
+
+    fake_wechat_payload = {"conversations": [{"id": "wxid_fictional", "name": "Fictional"}]}
+    monkeypatch.setattr("readers.wechat.AppContext", lambda: object())
+    monkeypatch.setattr("readers.wechat.list_conversations", lambda app, limit: fake_wechat_payload)
+    # A fictional refresh child that fails with a JSON error on stdout; its stderr is set per run below.
+    child_stderr = {"text": ""}
+    monkeypatch.setattr(
+        "readers.backup.default_refresh_command",
+        lambda archive_path: [
+            sys.executable,
+            "-c",
+            "import json, sys; "
+            f"sys.stderr.write({child_stderr['text']!r}); "
+            "print(json.dumps({'error': 'Fictional profile not found'})); sys.exit(1)",
+        ],
+    )
+
+    entry_points = {
+        "teams": lambda: teams_main(
+            ["--no-refresh", "--archive-path", str(archive), "--profile-dir", str(missing_profile), "conversations"]
+        ),
+        "wechat": lambda: wechat_main(["conversations"]),
+        "backup": lambda: backup_main(
+            ["--archive-path", str(archive), "--dest", str(missing_dest), "--log-path", str(tmp_path / "log.jsonl")]
+        ),
+        "blocklist": lambda: blocklist_main([]),
+    }
+
+    def run_all():
+        outputs = {}
+        for name, call in entry_points.items():
+            monkeypatch.setattr(settings_module, "_warned_repo_settings", False)
+            try:
+                code = call()
+            except SystemExit as exc:
+                code = exc.code
+            captured = capsys.readouterr()
+            out = captured.out
+            if name == "backup":
+                # The backup stamps wall-clock times; drop them so a second boundary cannot flake the comparison
+                out = re.sub(r'("(?:started|finished)"\s*:\s*")[^"]*"', r'\1"', out)
+            outputs[name] = (code, out, captured.err)
+        return outputs
+
+    monkeypatch.setattr(settings_module, "_checkout_root", lambda: None)
+    baseline = run_all()
+
+    checkout = _setup_repo_checkout(tmp_path, monkeypatch, with_settings=True)
+    repo_settings = checkout / "settings.toml"
+    child_stderr["text"] = f"Warning: ignoring repository settings file {repo_settings}\n"
+    with_warning = run_all()
+    assert "Fictional profile not found" in json.loads(with_warning["backup"][1])["refresh"]["detail"]
+
+    for name in ("teams", "wechat", "backup", "blocklist"):
+        base_code, base_out, _ = baseline[name]
+        warn_code, warn_out, warn_err = with_warning[name]
+        assert warn_code == base_code
+        assert warn_out == base_out
+        assert str(repo_settings) in warn_err
+        assert str(settings_module.DEFAULT_SETTINGS_PATH) in warn_err
+    for name in ("teams", "backup"):
+        json.loads(with_warning[name][1])
+    assert json.loads(with_warning["wechat"][1]) == fake_wechat_payload
