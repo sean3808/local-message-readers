@@ -66,8 +66,8 @@ def test_loader_older_placeholder_then_newer_dict_keeps_dict() -> None:
     assert failures == []
 
 
-def test_loader_none_seq_preserves_existing_behavior_without_crashing() -> None:
-    """When ldb_seq_no is None: does not crash, never overwrites a sequenced record, and can be superseded by a sequenced record."""
+def test_loader_none_seq_does_not_crash_and_yields_to_sequenced_records() -> None:
+    """When ldb_seq_no is None: does not crash, never overwrites a seen key, and is superseded by a sequenced record."""
     failures: list[str] = []
     dict_none = {"messageMap": {"1": {"id": "1"}}}
     dict_seq = {"messageMap": {"2": {"id": "2"}}}
@@ -171,7 +171,9 @@ def _seed_cleanup_archive(path: Path):
         ],
         source="cache",
     )
-    with sqlite3.connect(path) as conn:
+    from contextlib import closing
+
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute(
             "UPDATE messages SET sources = '[\"cache\", \"export\"]' WHERE channel = 'teams' AND conversation_id = 'conv_c' AND id = '-1'"
         )
@@ -312,5 +314,159 @@ def test_clean_placeholder_failed_write_rolls_back(tmp_path: Path) -> None:
             "SELECT last_message_time FROM conversations WHERE id = 'conv_a'"
         ).fetchone()
         assert conv_a == ("2026-11-10T10:05:00+08:00",)
+
+
+def _fake_ingest_snapshot(message_map: dict[str, dict[str, object]]) -> MagicMock:
+    conv_id = "19:ingest_conv@thread.v2"
+    conv_rec = _make_record(
+        conv_id,
+        {
+            "id": conv_id,
+            "threadProperties": {"topic": "Ingest Group"},
+            "lastMessageTimeUtc": 1795500734838,
+        },
+        seq=10,
+    )
+    chain_rec = _make_record(
+        conv_id,
+        {"conversationId": conv_id, "messageMap": message_map},
+        seq=11,
+    )
+
+    def _store_db(store_name: str, recs: list[SimpleNamespace]) -> MagicMock:
+        store = MagicMock()
+        store.iterate_records.return_value = recs
+        db = MagicMock()
+        db.get_object_store_by_name.return_value = store
+        db.__contains__.side_effect = lambda name: name == store_name
+        return db
+
+    dbs = {
+        "conversation-manager": _store_db("conversations", [conv_rec]),
+        "replychain-manager": _store_db("replychains", [chain_rec]),
+    }
+    ids = []
+    by_id = {}
+    for marker, db in dbs.items():
+        db_id = MagicMock()
+        db_id.name = f"https_teams.live.com_0:{marker}:"
+        ids.append(db_id)
+        by_id[id(db_id)] = db
+
+    fake = MagicMock()
+    fake.database_ids = ids
+    fake.__getitem__.side_effect = lambda db_id: by_id[id(db_id)]
+    wrapped = MagicMock()
+    wrapped.return_value.__enter__.return_value = fake
+    return wrapped
+
+
+def test_ingest_cache_ignores_int_and_str_placeholder_ids_in_both_tables(tmp_path: Path) -> None:
+    import sqlite3
+
+    from readers.archive import Archive
+    from readers.teams.snapshot import ingest_cache
+
+    conv_id = "19:ingest_conv@thread.v2"
+    profile = tmp_path / "profile"
+    (profile / "IndexedDB" / "https_teams.live.com_0.indexeddb.leveldb").mkdir(parents=True)
+    arc = Archive(db_path=tmp_path / "arc.db")
+
+    msg_map = {
+        "k_int": {
+            "id": -1,
+            "originalArrivalTime": 1795500733199,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "<p>pending copy</p>",
+        },
+        "k_str": {
+            "id": "-1",
+            "originalArrivalTime": 1795500733250,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "<p>pending copy str</p>",
+        },
+        "k_real": {
+            "id": "1795500734838",
+            "originalArrivalTime": 1795500734838,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "<p>confirmed copy</p>",
+        },
+    }
+    with patch("readers.teams.snapshot.WrappedIndexDB", _fake_ingest_snapshot(msg_map)):
+        outcome = ingest_cache(arc, profile)
+
+    assert outcome.success
+    assert outcome.failures == []
+    with sqlite3.connect(arc.db_path) as conn:
+        for table in ("messages", "cache_messages"):
+            ids = [r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE conversation_id = ?", (conv_id,)).fetchall()]
+            assert ids == ["1795500734838"]
+
+
+def test_ingest_cache_edited_deleted_or_quoted_confirmed_copy_never_ingests_minus_one(tmp_path: Path) -> None:
+    import sqlite3
+
+    from readers.archive import Archive
+    from readers.teams.snapshot import ingest_cache
+
+    conv_id = "19:ingest_conv@thread.v2"
+    profile = tmp_path / "profile"
+    (profile / "IndexedDB" / "https_teams.live.com_0.indexeddb.leveldb").mkdir(parents=True)
+    arc = Archive(db_path=tmp_path / "arc.db")
+
+    msg_map = {
+        "p_edited": {
+            "id": -1,
+            "originalArrivalTime": 1795500733000,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "<p>original unedited text</p>",
+        },
+        "c_edited": {
+            "id": "1795500734000",
+            "originalArrivalTime": 1795500734000,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": '<blockquote itemtype="http://schema.skype.com/Reply">quote</blockquote><p>edited text</p>',
+            "skypeeditedid": "1795500734000",
+        },
+        "p_deleted": {
+            "id": "-1",
+            "originalArrivalTime": 1795500735000,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "<p>before delete</p>",
+        },
+        "c_deleted": {
+            "id": "1795500736000",
+            "originalArrivalTime": 1795500736000,
+            "creator": "8:alice",
+            "imDisplayName": "Alice",
+            "messageType": "RichText/Html",
+            "content": "",
+            "properties": {"deletetime": "1795500737000"},
+        },
+    }
+    with patch("readers.teams.snapshot.WrappedIndexDB", _fake_ingest_snapshot(msg_map)):
+        outcome = ingest_cache(arc, profile)
+
+    assert outcome.success
+    assert outcome.failures == []
+    with sqlite3.connect(arc.db_path) as conn:
+        for table in ("messages", "cache_messages"):
+            ids = sorted(
+                r[0] for r in conn.execute(f"SELECT id FROM {table} WHERE conversation_id = ?", (conv_id,)).fetchall()
+            )
+            assert ids == ["1795500734000", "1795500736000"]
+
 
 

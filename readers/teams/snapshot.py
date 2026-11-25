@@ -80,9 +80,9 @@ def _load_latest_store_records(
 ) -> dict[Any, Any]:
     """Read all records of a store and return {key: latest record} (the one with the largest ldb_seq_no wins)."""
     # Track (ldb_seq_no, record_or_None) across both real dicts and empty placeholders so a newer
-    # placeholder evicts an older dict regardless of iteration order. When seq is None, preserve
-    # existing behavior: it is stored if the key is unseen, never overwrites a seen key, and does
-    # not crash when compared against a sequenced record.
+    # placeholder evicts an older dict regardless of iteration order. When seq is None, store it if
+    # the key is unseen, never let it overwrite a seen key, and let any later sequenced record
+    # supersede it without crashing.
     latest_entries: dict[Any, tuple[Any, Any | None]] = {}
 
     def _note_failed_key(key: Any) -> None:
