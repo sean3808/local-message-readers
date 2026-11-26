@@ -16,7 +16,7 @@ Teams 的缓存只保留最近一段时间的消息，所以 `teams-reader` 还�
 - **只读不写。** 没有任何发送、修改或删除消息的功能。
 - **Teams 只支持个人版账号。** 公司或学校的工作账号消息读不到。
 - **只能读到这台电脑上已有的数据。** 桌面版软件关着或退出登录期间，那段时间的消息不会自动补回；请先在手机和桌面版之间同步聊天记录。reader 无法判断数据是否完整，重要时请拿最新一条消息和手机对照。
-- **不支持：** 部分微信通话状态，以及图片内容（只返回标识符）。
+- **不支持：** 部分微信通话状态，以及微信 4.x 加密的 `.dat` 图片（`wechat-reader download` 会报告 `encrypted_unsupported`，不会尝试解密）。
 
 ## 安装（给非开发者）
 
@@ -62,7 +62,10 @@ uv run wechat-cli init --db-dir "$env:USERPROFILE\Documents\xwechat_files\<你�
 ```powershell
 uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
+uv run wechat-reader download <message-id> --conversation <会话> --to <目标文件夹> --time <时间>
 ```
+
+`download` 会把本地缓存的文件、视频／缩略图和明文图片安全复制到 `<目标文件夹>`（必须位于微信账号文件夹之外），不覆盖已有文件（必要时加上 ` (1)` 后缀），并在输出中附带 `time` 与 `timestamp` 供核对命中消息。微信 4.x 加密的 `.dat` 图片会报告 `encrypted_unsupported` 且不会复制。请从 `messages`、`search` 或 `recent` 输出中同一条消息获取 `<message-id>`（`id`）与 `<时间>`（`time`）（`local_id` 会在各个分片数据库重新起算，因此 `--time` 是标准用法；如果省略且有多条消息共用同一个 `id`，会返回错误与 `alternatives`）。
 
 reader 不会记住已经给你看过什么；`recent` 的 `--since` 时间由调用方自己记录。最稳妥的做法是把上次读到最后一条消息的 `time` 原样传回去：它带着时差，电脑换了时区也仍然指向同一个时刻。没写时差的时间会当作这台电脑的本地时间。公众号（订阅号、服务号）不会出现在 `conversations`、`search` 和 `recent` 的结果里。若想在 `recent` 跳过噪杂会话（例如游戏群），可在 `settings.toml` 的 `wechat_exclude_conversations` 填入会话 ID；排除会在 `--limit` 之前执行，并以 `excluded_messages` 报告整个时间范围内被排除的消息数（`conversations`、`messages` 和 `search` 仍会返回这些会话）。
 

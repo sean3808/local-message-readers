@@ -5,6 +5,7 @@ Read-only: exposes no send path (ADR-0002). Decrypted artifacts are written to a
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -35,7 +36,8 @@ from wechat_cli.core.messages import (
 
 from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
-from readers.timeparse import FORMATS_HELP, parse_time_range
+from readers.timeparse import FORMATS_HELP, parse_time_bound, parse_time_range
+from readers.wechat_media import _is_reparse_or_symlink, resolve_and_download_media
 
 TEMP_PREFIX = "wechat-reader-"
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
@@ -297,6 +299,163 @@ def recent(app, since, limit, exclude_conversations=None):
     }
 
 
+def _norm_compare_path(path):
+    real = os.path.realpath(path)
+    if real.upper().startswith("\\\\?\\UNC\\"):
+        real = "\\\\" + real[8:]
+    elif real.startswith("\\\\?\\"):
+        real = real[4:]
+    return os.path.normcase(real)
+
+
+def _validate_dest_dir(app, dest_dir):
+    if not os.path.isdir(dest_dir):
+        raise ValueError(f"Destination is not an existing directory: {dest_dir}")
+    db_dir_norm = os.path.normpath(app.db_dir)
+    account_root = os.path.dirname(db_dir_norm)
+    msg_root = os.path.join(account_root, "msg")
+    protected_roots = [account_root, db_dir_norm, msg_root]
+    for parent in (account_root, msg_root):
+        if os.path.isdir(parent):
+            try:
+                with os.scandir(parent) as entries:
+                    for entry in entries:
+                        try:
+                            st = os.lstat(entry.path)
+                        except OSError:
+                            continue
+                        if _is_reparse_or_symlink(st):
+                            protected_roots.append(os.path.realpath(entry.path))
+            except OSError:
+                pass
+    norm_dest = _norm_compare_path(dest_dir)
+    for root in protected_roots:
+        norm_root = _norm_compare_path(root)
+        try:
+            common = os.path.commonpath([norm_root, norm_dest])
+        except ValueError:
+            common = ""
+        if common == norm_root:
+            raise ValueError("Destination must not be inside the WeChat account folder")
+
+
+def _find_message(app, ctx, message_id, target_ts):
+    table_name = "Msg_" + hashlib.md5(ctx["username"].encode("utf-8")).hexdigest()
+    if not _is_safe_msg_table_name(table_name):
+        raise ValueError(f"Invalid message table name: {table_name}")
+    matches = []
+    failures = []
+    for rel_key in app.msg_db_keys:
+        shard_disk_path = os.path.join(app.db_dir, rel_key)
+        try:
+            os.stat(shard_disk_path)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            failures.append(f"{rel_key}: {e}")
+            continue
+        try:
+            db_path = app.cache.get(rel_key)
+        except Exception:  # noqa: BLE001
+            db_path = None
+        if not db_path:
+            failures.append(f"{rel_key}: could not be opened")
+            continue
+        try:
+            with closing(sqlite3.connect(db_path)) as conn:
+                has_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,),
+                ).fetchone()
+                if not has_table:
+                    continue
+                rows = conn.execute(
+                    f"""
+                    SELECT local_id, local_type, create_time, real_sender_id, message_content, WCDB_CT_message_content
+                    FROM [{table_name}] WHERE local_id = ?
+                    """,
+                    (message_id,),
+                ).fetchall()
+                matches.extend(rows)
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{rel_key}: {e}")
+
+    if failures and target_ts is None:
+        return None, failures, {
+            "error": f"message id {message_id} could not be checked in every message database; retry with --time or fix the failures",
+            "failures": failures,
+        }
+
+    if target_ts is not None:
+        matches = [row for row in matches if int(row[2]) == target_ts]
+
+    seen_messages = set()
+    deduped = []
+    for row in matches:
+        key = (int(row[2]), row[1], row[5], row[4])
+        if key not in seen_messages:
+            seen_messages.add(key)
+            deduped.append(row)
+
+    if not deduped:
+        raise ValueError(f"Message not found: {message_id}")
+    if len(deduped) > 1:
+        deduped.sort(key=lambda row: int(row[2]))
+        alternatives = [
+            {
+                "time": _iso(row[2]),
+                "timestamp": row[2],
+                "type": format_msg_type(row[1]),
+            }
+            for row in deduped
+        ]
+        if target_ts is not None:
+            err = f"message id {message_id} is ambiguous: {len(deduped)} distinct messages share it at the same time; cannot disambiguate with --time"
+        else:
+            err = f"message id {message_id} is ambiguous: {len(deduped)} messages share it; retry with --time"
+        return None, failures, {"error": err, "alternatives": alternatives}
+
+    return deduped[0], failures, None
+
+
+def download_media(app, message_id, conversation, dest_dir, time_str=""):
+    _validate_dest_dir(app, dest_dir)
+    parsed_time = parse_time_bound(time_str) if time_str else None
+    target_ts = int(parsed_time) if parsed_time is not None else None
+    ctx = _resolve(app, conversation)
+
+    row, failures, err_result = _find_message(app, ctx, message_id, target_ts)
+    if err_result is not None:
+        return err_result
+
+    _, local_type, create_ts, _, raw_content, ct = row
+    content = decompress_content(raw_content, ct)
+
+    try:
+        hardlink_db_path = app.cache.get(os.path.join("hardlink", "hardlink.db"))
+    except Exception:  # noqa: BLE001
+        hardlink_db_path = None
+
+    msg_root = os.path.join(os.path.dirname(os.path.normpath(app.db_dir)), "msg")
+    items = resolve_and_download_media(
+        hardlink_db_path,
+        msg_root,
+        local_type,
+        content,
+        dest_dir,
+        is_group=ctx["is_group"],
+    )
+    return {
+        "conversation": _conversation(ctx),
+        "message_id": message_id,
+        "time": _iso(create_ts),
+        "timestamp": create_ts,
+        "message_type": format_msg_type(local_type),
+        "items": items,
+        "failures": failures,
+    }
+
+
 def _parser():
     p = argparse.ArgumentParser(prog="wechat-reader", description="Read the local WeChat read-only; JSON output to stdout")
     p.add_argument("--settings", default=None, help=SETTINGS_HELP)
@@ -322,11 +481,18 @@ def _parser():
     r = sub.add_parser("recent", help="Messages after a given time across all conversations (oldest to newest)")
     r.add_argument("--since", required=True, help=f"The time last read up to: {FORMATS_HELP}; passing back the last message's `time` is immune to time zone changes. Boundary included, dedupe by (conversation_id, id)")
     r.add_argument("--limit", type=int, default=100)
+
+    d = sub.add_parser("download", help="Resolve and safely copy locally cached media/attachments for a message")
+    d.add_argument("message_id", type=int, metavar="message-id", help="Message integer local_id as reported by messages")
+    d.add_argument("--conversation", required=True, help="Display name, remark name or id (such as wxid_xxx, xxx@chatroom)")
+    d.add_argument("--to", required=True, dest="to_dir", help="Existing destination directory")
+    d.add_argument("--time", default="", dest="msg_time", help=f"The message's `time` from messages/search/recent output, passed back unchanged ({FORMATS_HELP})")
     return p
 
 
 def _run(args):
-    validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
+    if args.cmd != "download":
+        validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
     if args.cmd == "search":
         if any(not kw.strip() for kw in args.keywords):
             raise ValueError("Search keyword must not be blank")
@@ -338,6 +504,8 @@ def _run(args):
     if args.cmd == "recent":
         excluded = get_setting("wechat_exclude_conversations") or []
         return recent(app, args.since, args.limit, exclude_conversations=excluded)
+    if args.cmd == "download":
+        return download_media(app, args.message_id, args.conversation, args.to_dir, time_str=args.msg_time)
     return search(app, args.keywords, args.conversation, args.limit, args.start, args.end)
 
 
@@ -350,7 +518,13 @@ def main(argv=None):
     DBCache.MTIME_FILE = os.path.join(cache_dir, "_mtimes.json")
     try:
         configure_settings(args.settings)
-        result, code = _run(args), 0
+        result = _run(args)
+        if "error" in result:
+            code = 1
+        elif "items" in result:
+            code = 0 if any(item["status"] == "resolved" for item in result["items"]) else 1
+        else:
+            code = 0
     except Exception as e:  # noqa: BLE001 — any failure is reported to the Local Agent as JSON
         result, code = {"error": str(e)}, 1
     finally:

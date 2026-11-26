@@ -16,7 +16,7 @@ Teams keeps only a rolling window of recent messages in its cache. So `teams-rea
 - **Read only.** There is no function that sends, edits or deletes a message.
 - **Teams personal accounts only.** Messages of a company or school work account cannot be read.
 - **Only what is already on this computer.** If the desktop app was closed or logged out for a while, the messages from that time are not fetched for you. Sync the chat history between your phone and the desktop app first. The readers cannot tell whether the data is complete, so compare the newest message with your phone when it matters.
-- **Not supported:** some WeChat call states and the content of images (only an identifier is returned).
+- **Not supported:** some WeChat call states, and encrypted WeChat 4.x `.dat` images (`wechat-reader download` reports `encrypted_unsupported` rather than decrypting them).
 
 ## Install (for non-developers)
 
@@ -62,7 +62,10 @@ Then try it:
 ```powershell
 uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
+uv run wechat-reader download <message-id> --conversation <conversation> --to <target folder> --time <time>
 ```
+
+`download` copies locally cached files, videos/thumbnails, and plaintext images to `<target folder>` (which must be outside the WeChat account folder) without overwriting existing files (adding ` (1)` if needed), and returns `time` and `timestamp` alongside `items` so you can verify the matched message. Encrypted WeChat 4.x `.dat` images are reported as `encrypted_unsupported` and are not copied. Take `<message-id>` (`id`) and `<time>` (`time`) from the same message in `messages`, `search`, or `recent` output (`local_id` restarts per sharded database, so `--time` is the standard way to disambiguate; if omitted and multiple messages share the `id`, it returns an error with `alternatives`).
 
 The reader does not remember what it has already shown you; whoever calls `recent` keeps the `--since` time. The safest value is the `time` of the last message read, passed back unchanged: it carries its time zone offset, so it still points to the same moment after the computer's time zone changes. A time typed without an offset means this computer's local time. Official accounts (subscription and service accounts) are left out of `conversations`, `search` and `recent`. To skip noisy conversations in `recent` (for example a game group), list their IDs in `wechat_exclude_conversations` in `settings.toml`; exclusion runs before `--limit`, and `recent` reports `excluded_messages` for the whole range (`conversations`, `messages` and `search` still return them).
 
