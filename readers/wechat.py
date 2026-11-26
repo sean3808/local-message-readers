@@ -298,9 +298,17 @@ def recent(app, since, limit, exclude_conversations=None):
     }
 
 
-def _find_message(ctx, message_id, target_ts):
+def _find_message(app, ctx, message_id, target_ts):
     matches = []
     failures = []
+    if target_ts is None:
+        for rel_key in app.msg_db_keys:
+            try:
+                opened = app.cache.get(rel_key)
+            except Exception:  # noqa: BLE001
+                opened = None
+            if opened is None:
+                failures.append("a message database could not be opened")
     for tc in _iter_table_contexts(ctx):
         table_name = tc["table_name"]
         if not _is_safe_msg_table_name(table_name):
@@ -359,11 +367,20 @@ def _find_message(ctx, message_id, target_ts):
 def download_media(app, message_id, conversation, dest_dir, time_str=""):
     if not os.path.isdir(dest_dir):
         raise ValueError(f"Destination is not an existing directory: {dest_dir}")
+    account_root = os.path.dirname(app.db_dir)
+    norm_account = os.path.normcase(os.path.realpath(account_root))
+    norm_dest = os.path.normcase(os.path.realpath(dest_dir))
+    try:
+        common = os.path.commonpath([norm_account, norm_dest])
+    except ValueError:
+        common = ""
+    if common == norm_account:
+        raise ValueError("Destination must not be inside the WeChat account folder")
     parsed_time = parse_time_bound(time_str) if time_str else None
     target_ts = int(parsed_time) if parsed_time is not None else None
     ctx = _resolve(app, conversation)
 
-    match, failures, err_result = _find_message(ctx, message_id, target_ts)
+    match, failures, err_result = _find_message(app, ctx, message_id, target_ts)
     if err_result is not None:
         return err_result
 

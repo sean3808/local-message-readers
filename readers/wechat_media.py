@@ -235,7 +235,7 @@ def _open_hardlink_db(hardlink_db_path: str | None) -> sqlite3.Connection | None
     if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
         return None
     try:
-        uri = f"file:{Path(hardlink_db_path).as_posix()}?mode=ro"
+        uri = Path(hardlink_db_path).resolve().as_uri() + "?mode=ro"
         return sqlite3.connect(uri, uri=True)
     except sqlite3.Error:
         return None
@@ -269,10 +269,7 @@ def _parse_message_xml(content: str | bytes | None, local_type: int, is_group: b
 
 
 def _find_tag(root, tag: str):
-    if root.tag == tag:
-        return root
-    found = root.find(tag)
-    return found if found is not None else root.find(f".//{tag}")
+    return root if root.tag == tag else root.find(tag)
 
 
 def _missing_key_item(kind: str, hardlink_db_path: str | None) -> list[dict[str, object]]:
