@@ -5,6 +5,7 @@ Read-only: exposes no send path (ADR-0002). Decrypted artifacts are written to a
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -35,7 +36,7 @@ from wechat_cli.core.messages import (
 
 from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
-from readers.timeparse import FORMATS_HELP, parse_time_range
+from readers.timeparse import FORMATS_HELP, parse_time_bound, parse_time_range
 from readers.wechat_media import resolve_and_download_media
 
 TEMP_PREFIX = "wechat-reader-"
@@ -298,9 +299,19 @@ def recent(app, since, limit, exclude_conversations=None):
     }
 
 
-def download_media(app, message_id, conversation, dest_dir):
+def _content_digest(raw_content):
+    if raw_content is None:
+        return ""
+    data = raw_content if isinstance(raw_content, bytes) else str(raw_content).encode("utf-8")
+    prefix = b"B" if isinstance(raw_content, bytes) else b"S"
+    return hashlib.sha256(prefix + data).hexdigest()
+
+
+def download_media(app, message_id, conversation, dest_dir, time_str=""):
     if not os.path.isdir(dest_dir):
         raise ValueError(f"Destination is not an existing directory: {dest_dir}")
+    parsed_time = parse_time_bound(time_str) if time_str else None
+    target_ts = int(parsed_time) if parsed_time is not None else None
     ctx = _resolve(app, conversation)
     matches = []
     failures = []
@@ -321,12 +332,36 @@ def download_media(app, message_id, conversation, dest_dir):
         except Exception as e:  # noqa: BLE001
             failures.append(f"{tc['username']}: {e}")
 
-    if len(matches) > 1:
-        raise ValueError(f"Ambiguous message id {message_id}: found {len(matches)} matching messages")
-    if not matches:
-        raise ValueError(f"Message not found: {message_id}")
+    if target_ts is not None:
+        matches = [(row, tc) for row, tc in matches if int(row[2]) == target_ts]
 
-    row, tc = matches[0]
+    seen_messages = set()
+    deduped = []
+    for row, tc in matches:
+        key = (int(row[2]), row[1], _content_digest(row[4]))
+        if key not in seen_messages:
+            seen_messages.add(key)
+            deduped.append((row, tc))
+
+    if not deduped:
+        raise ValueError(f"Message not found: {message_id}")
+    if len(deduped) > 1:
+        deduped.sort(key=lambda item: int(item[0][2]))
+        alternatives = [
+            {
+                "time": _iso(row[2]),
+                "timestamp": row[2],
+                "type": format_msg_type(row[1]),
+            }
+            for row, _ in deduped
+        ]
+        if target_ts is not None:
+            err = f"message id {message_id} is ambiguous: {len(deduped)} distinct messages share it at the same time; cannot disambiguate with --time"
+        else:
+            err = f"message id {message_id} is ambiguous: {len(deduped)} messages share it; retry with --time"
+        return {"error": err, "alternatives": alternatives}, 1
+
+    row, tc = deduped[0]
     _, local_type, _, _, raw_content, ct = row
     content = decompress_content(raw_content, ct)
 
@@ -385,6 +420,7 @@ def _parser():
     d.add_argument("message_id", type=int, metavar="message-id", help="Message integer local_id as reported by messages")
     d.add_argument("--conversation", required=True, help="Display name, remark name or id (such as wxid_xxx, xxx@chatroom)")
     d.add_argument("--to", required=True, dest="to_dir", help="Existing destination directory")
+    d.add_argument("--time", default="", dest="msg_time", help=f"The message's `time` from messages/search/recent output, passed back unchanged ({FORMATS_HELP})")
     return p
 
 
@@ -403,7 +439,7 @@ def _run(args):
         excluded = get_setting("wechat_exclude_conversations") or []
         return recent(app, args.since, args.limit, exclude_conversations=excluded), 0
     if args.cmd == "download":
-        return download_media(app, args.message_id, args.conversation, args.to_dir)
+        return download_media(app, args.message_id, args.conversation, args.to_dir, time_str=args.msg_time)
     return search(app, args.keywords, args.conversation, args.limit, args.start, args.end), 0
 
 

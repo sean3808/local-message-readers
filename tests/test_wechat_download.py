@@ -123,8 +123,9 @@ def _run_download(
     conv: str,
     dest: Path,
     capsys: pytest.CaptureFixture[str],
+    msg_time: str | None = None,
 ) -> tuple[int, dict]:
-    code = wechat.main([
+    argv = [
         *settings_args(tmp_path),
         "download",
         str(msg_id),
@@ -132,7 +133,10 @@ def _run_download(
         conv,
         "--to",
         str(dest),
-    ])
+    ]
+    if msg_time is not None:
+        argv.extend(["--time", msg_time])
+    code = wechat.main(argv)
     out = json.loads(capsys.readouterr().out)
     return code, out
 
@@ -883,13 +887,17 @@ def test_download_duplicate_local_id_across_dbs_and_arg_errors(
     dest = tmp_path / "out"
     dest.mkdir()
 
-    # Duplicate local_id across two dbs
+    # Duplicate local_id across two dbs with different content/timestamps -> alternatives + retry with --time
     code, out = _run_download(tmp_path, 50, "wxid_alice", dest, capsys)
     assert code == 1
     assert "error" in out
     assert "2" in out["error"]
+    assert "--time" in out["error"]
+    assert [a["timestamp"] for a in out["alternatives"]] == [1794285100, 1794285200]
+    assert all(set(a.keys()) == {"time", "timestamp", "type"} for a in out["alternatives"])
     assert str(db1) not in out["error"]
     assert str(db2) not in out["error"]
+    assert list(dest.iterdir()) == []
 
     # Message not found
     code2, out2 = _run_download(tmp_path, 9999, "wxid_alice", dest, capsys)
@@ -952,3 +960,123 @@ def test_existing_messages_subcommand_json_unchanged(
     assert len(out["messages"]) == 1
     assert out["messages"][0]["id"] == 1
     assert out["messages"][0]["text"] == "hello"
+
+
+def test_download_sharded_local_id_disambiguated_by_time_and_deduped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from datetime import datetime
+
+    db1 = tmp_path / "msg_0.db"
+    db2 = tmp_path / "msg_1.db"
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[(db1, "Msg_11111111111111111111111111111111"), (db2, "Msg_11111111111111111111111111111111")],
+    )
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "jan_quote.pdf").write_bytes(b"%PDF-jan")
+    (fdir / "feb_quote.pdf").write_bytes(b"%PDF-feb")
+    (fdir / "same_doc.pdf").write_bytes(b"%PDF-same")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("aa01" * 8, 1, "jan_quote.pdf", 1, 0),
+    )
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("aa02" * 8, 1, "feb_quote.pdf", 1, 0),
+    )
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("aa03" * 8, 1, "same_doc.pdf", 1, 0),
+    )
+    hl.commit()
+    hl.close()
+
+    ts1 = 1794285100
+    ts2 = 1794285200
+    ts_same = 1794285300
+    ts_tie = 1794285400
+
+    m1 = _make_msg_db(db1, "Msg_11111111111111111111111111111111")
+    m1.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (10, 49, ts1, 1, f"<msg><appmsg><type>6</type><md5>{'aa01' * 8}</md5></appmsg></msg>", 0),
+    )
+    m1.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (20, 49, ts_same, 1, f"<msg><appmsg><type>6</type><md5>{'aa03' * 8}</md5></appmsg></msg>", 0),
+    )
+    m1.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (30, 49, ts_tie, 1, f"<msg><appmsg><type>6</type><md5>{'aa01' * 8}</md5></appmsg></msg>", 0),
+    )
+    m1.commit()
+    m1.close()
+
+    m2 = _make_msg_db(db2, "Msg_11111111111111111111111111111111")
+    m2.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (10, 49, ts2, 1, f"<msg><appmsg><type>6</type><md5>{'aa02' * 8}</md5></appmsg></msg>", 0),
+    )
+    # Byte-identical duplicate of local_id=20 in db2
+    m2.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (20, 49, ts_same, 1, f"<msg><appmsg><type>6</type><md5>{'aa03' * 8}</md5></appmsg></msg>", 0),
+    )
+    # Distinct message at identical timestamp ts_tie
+    m2.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (30, 49, ts_tie, 1, f"<msg><appmsg><type>6</type><md5>{'aa02' * 8}</md5></appmsg></msg>", 0),
+    )
+    m2.commit()
+    m2.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    # 1) Ambiguous without --time -> alternatives, exit 1, nothing written
+    c_amb, o_amb = _run_download(tmp_path, 10, "wxid_alice", dest, capsys)
+    assert c_amb == 1
+    assert "--time" in o_amb["error"]
+    assert [a["timestamp"] for a in o_amb["alternatives"]] == [ts1, ts2]
+    assert list(dest.iterdir()) == []
+
+    # 2) Disambiguate first with ISO-with-offset string
+    iso_1 = datetime.fromtimestamp(ts1).astimezone().isoformat(timespec="seconds")
+    c_iso, o_iso = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=iso_1)
+    assert c_iso == 0
+    assert o_iso["items"][0]["name"] == "jan_quote.pdf"
+    assert (dest / "jan_quote.pdf").read_bytes() == b"%PDF-jan"
+    assert not (dest / "feb_quote.pdf").exists()
+
+    # 3) Disambiguate second with naive local time string
+    naive_2 = datetime.fromtimestamp(ts2).strftime("%Y-%m-%d %H:%M:%S")
+    c_naive, o_naive = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=naive_2)
+    assert c_naive == 0
+    assert o_naive["items"][0]["name"] == "feb_quote.pdf"
+    assert (dest / "feb_quote.pdf").read_bytes() == b"%PDF-feb"
+
+    # 4) Byte-identical duplicates in two dbs -> resolved without --time
+    c_dup, o_dup = _run_download(tmp_path, 20, "wxid_alice", dest, capsys)
+    assert c_dup == 0
+    assert o_dup["items"][0]["name"] == "same_doc.pdf"
+
+    # 5) --time matching none -> Message not found
+    c_none, o_none = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time="2020-01-01 00:00:00")
+    assert c_none == 1
+    assert "Message not found" in o_none["error"]
+
+    # 6) --time given but multiple distinct candidates share that exact second
+    iso_tie = datetime.fromtimestamp(ts_tie).astimezone().isoformat(timespec="seconds")
+    c_tie, o_tie = _run_download(tmp_path, 30, "wxid_alice", dest, capsys, msg_time=iso_tie)
+    assert c_tie == 1
+    assert "same time" in o_tie["error"]
+    assert [a["timestamp"] for a in o_tie["alternatives"]] == [ts_tie, ts_tie]
