@@ -137,3 +137,49 @@ def test_changes_retry_once(inputs, tmp_path, monkeypatch, changes, expected_cod
         assert (tmp_path / "out" / "wechat" / "wxid_fake" / "db_storage" / "data").read_text() == "changed"
     else:
         assert files == {"archive.db"}
+
+
+def test_collect_wechat_snapshots_db_and_omits_wal_shm(inputs, tmp_path):
+    account = inputs[1]
+    db_path = account / "db_storage" / "msg.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA page_size = 4096")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA wal_autocheckpoint = 0")
+        conn.execute("PRAGMA cache_size = 1")
+        conn.execute("CREATE TABLE chat (id INTEGER PRIMARY KEY, body TEXT)")
+        conn.execute("INSERT INTO chat (id, body) VALUES (1, 'committed')")
+        conn.commit()
+        conn.execute("BEGIN")
+        for idx in range(2, 40):
+            conn.execute("INSERT INTO chat (id, body) VALUES (?, ?)", (idx, f"uncommitted-{idx}-" + ("x" * 200)))
+
+        report, code = run(inputs, tmp_path)
+    finally:
+        conn.close()
+
+    assert code == 0
+    assert report["wechat"]["ok"] is True
+    files = extract(report, tmp_path)
+    assert "wechat/wxid_fake/db_storage/msg.db" in files
+    assert "wechat/wxid_fake/db_storage/msg.db-wal" not in files
+    assert "wechat/wxid_fake/db_storage/msg.db-shm" not in files
+    assert "wechat/all_keys.json" in files
+
+    restored_db = tmp_path / "out" / "wechat" / "wxid_fake" / "db_storage" / "msg.db"
+    with sqlite3.connect(restored_db) as rconn:
+        assert rconn.execute("SELECT id, body FROM chat ORDER BY id").fetchall() == [(1, "committed")]
+
+
+def test_collect_wechat_corrupt_wal_fails_wechat_preserves_teams(inputs, tmp_path):
+    account = inputs[1]
+    (account / "db_storage" / "broken.db").write_bytes(b"\x00" * 4096)
+    (account / "db_storage" / "broken.db-wal").write_bytes(b"corrupt-wal-header")
+
+    report, code = run(inputs, tmp_path)
+    assert code == 2
+    assert report["backup"]["ok"] is True
+    assert report["wechat"]["ok"] is False
+    assert report["wechat"]["error"]
+    assert extract(report, tmp_path) == {"archive.db"}
