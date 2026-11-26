@@ -283,17 +283,10 @@ def recent(app, since, limit, exclude_conversations=None):
     start_ts, end_ts = parse_time_range(since, "")
     excluded_ids = {cid for cid in (exclude_conversations or ()) if cid}
     contexts, failures = _load_all_contexts(app)
-    if excluded_ids:
-        included = [c for c in contexts if c["username"] not in excluded_ids]
-        excluded_contexts = [c for c in contexts if c["username"] in excluded_ids]
-    else:
-        included = contexts
-        excluded_contexts = []
+    included = [c for c in contexts if c["username"] not in excluded_ids]
+    excluded_contexts = [c for c in contexts if c["username"] in excluded_ids]
     messages, truncated, collect_failures = _collect(app, included, limit, 0, start_ts, end_ts)
-    if excluded_contexts:
-        excluded_messages, count_failures = _count_messages(excluded_contexts, start_ts, end_ts)
-    else:
-        excluded_messages, count_failures = 0, []
+    excluded_messages, count_failures = _count_messages(excluded_contexts, start_ts, end_ts)
     return {
         "since": since,
         "truncated": truncated,

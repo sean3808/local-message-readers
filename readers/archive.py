@@ -1480,7 +1480,7 @@ class Archive:
             msg = _row_to_message(r, has_sources=True)
             conv_name = r["conversation_name"]
             msg["conversation_name"] = conv_name if conv_name is not None else msg["conversation_id"]
-            msg["is_group"] = bool(r["conversation_is_group"]) if r["conversation_is_group"] is not None else False
+            msg["is_group"] = bool(r["conversation_is_group"])
 
             text_lower = (msg["text"] or "").lower()
             files_lower = [str(f).lower() for f in (msg["files"] or [])]
