@@ -45,7 +45,7 @@ def fake_wechat_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     account = tmp_path / "Documents" / "xwechat_files" / "wxid_test" / "db_storage"
     account.mkdir(parents=True)
-    (account / "messages.db").write_bytes(b"fake")
+    (account / "messages.db").write_bytes(b"\x00" * 4096)  # one SQLite page: snapshots reject unaligned .db files
     for name in ("msg", "config", "business", "resource"):
         (account.parent / name).mkdir()
     key = tmp_path / ".wechat-cli" / "all_keys.json"

@@ -27,6 +27,7 @@ from typing import Any
 from readers.archive import get_default_archive_path
 from readers.settings import REPO_SETTINGS_WARNING_PREFIX, SETTINGS_HELP, active_settings_path, get_path_setting, load_settings
 from readers.settings import configure as configure_settings
+from readers.wechat_wal import read_snapshot
 
 __all__ = [
     "CREDENTIAL_TARGET",
@@ -380,7 +381,7 @@ def _validate_keep(keep: int) -> None:
 
 
 def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[str]]:
-    """Copy a stable read-only WeChat selection, retrying once on changes."""
+    """Copy a stable read-only WeChat selection, snapshotting db_storage SQLite databases."""
     accounts = [p for p in root.iterdir() if p.is_dir() and (p / "db_storage").is_dir()]
     if len(accounts) != 1:
         raise RuntimeError(f"Expected one WeChat account under {root}; found {len(accounts)}")
@@ -393,8 +394,9 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
             raise ValueError(f"WeChat destination overlaps source: {destination}")
     names = ("db_storage", "msg", "config", "business", "resource")
 
-    def inventory() -> tuple[dict[Path, tuple[int, int]], list[str]]:
+    def inventory() -> tuple[dict[Path, tuple[int, int]], list[Path], list[str]]:
         files = [key]
+        db_files: list[Path] = []
         folders = []
         for name in names:
             folder = account / name
@@ -408,12 +410,21 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
                 raise exc
 
             for directory, _, filenames in os.walk(folder, onerror=raise_walk_error):
-                files.extend(Path(directory) / filename for filename in filenames)
+                for filename in filenames:
+                    path = Path(directory) / filename
+                    if name == "db_storage":
+                        lowered = filename.lower()  # Windows file names are case-insensitive
+                        if lowered.endswith((".db-wal", ".db-shm")) and (path.parent / filename[:-4]).is_file():
+                            continue  # sidecar of a database that is snapshotted below
+                        if lowered.endswith(".db"):
+                            db_files.append(path)
+                            continue
+                    files.append(path)
         stats = {p: p.stat() for p in files}
-        return {p: (st.st_size, st.st_mtime_ns) for p, st in stats.items()}, folders
+        return {p: (st.st_size, st.st_mtime_ns) for p, st in stats.items()}, sorted(db_files), folders
 
-    for attempt in range(2):
-        before, folders = inventory()
+    for _attempt in range(2):
+        before, db_files, folders = inventory()
         if destination.exists():
             shutil.rmtree(destination)
         for name in folders:
@@ -422,9 +433,17 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
             target = destination / (Path("all_keys.json") if source == key else Path(account.name) / source.relative_to(account))
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-        if (before, folders) == inventory():
-            return len(before), folders
-    raise RuntimeError("WeChat files changed during both copy attempts")
+        if (before, db_files, folders) == inventory():
+            break
+    else:
+        raise RuntimeError("WeChat files changed during both copy attempts")
+
+    for db_path in db_files:
+        target = destination / account.name / db_path.relative_to(account)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(read_snapshot(db_path))
+
+    return len(before) + len(db_files), folders
 
 
 BACKUP_NAME_RE = re.compile(r"^teams-archive-(\d{8}-\d{6})\.7z$")
