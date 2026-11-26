@@ -201,33 +201,26 @@ def _resolve_group(
             return _item(kind, "not_found", REASON_DIR2ID_UNRESOLVED)
         return _item(kind, "not_found", REASON_FILE_MISSING)
 
-    hashed: list[tuple[str, str, str]] = []
-    saw_encrypted = False
+    hashed: list[tuple[str, str, str, bytes]] = []
     for path, raw_name in valid_files:
         try:
             digest, header = _hash_file(path)
         except OSError:
             return _item(kind, "not_found", REASON_FILE_MISSING)
-        if is_image:
-            detected_ext = _detect_image_suffix(header)
-            if detected_ext is None:
-                saw_encrypted = True
-                continue
-            dest_name = f"{Path(raw_name).stem}{detected_ext}"
-        else:
-            dest_name = raw_name
-        hashed.append((path, dest_name, digest))
+        hashed.append((path, raw_name, digest, header))
 
-    if not hashed:
-        if is_image and saw_encrypted:
-            return _item(kind, "encrypted_unsupported", REASON_ENCRYPTED_IMAGE)
-        return _item(kind, "not_found", REASON_FILE_MISSING)
-
-    distinct_digests = {d for _, _, d in hashed}
+    distinct_digests = {d for _, _, d, _ in hashed}
     if len(distinct_digests) > 1:
         return _item(kind, "ambiguous", REASON_MULTIPLE_DISTINCT_FILES)
 
-    chosen_path, chosen_name, chosen_digest = hashed[0]
+    chosen_path, chosen_raw_name, chosen_digest, chosen_header = hashed[0]
+    if is_image:
+        detected_ext = _detect_image_suffix(chosen_header)
+        if detected_ext is None:
+            return _item(kind, "encrypted_unsupported", REASON_ENCRYPTED_IMAGE)
+        chosen_name = f"{Path(chosen_raw_name).stem}{detected_ext}"
+    else:
+        chosen_name = chosen_raw_name
     return _copy_verified(kind, chosen_path, dest_dir, chosen_name, chosen_digest)
 
 
@@ -261,7 +254,10 @@ def _query_hardlink_rows(conn: sqlite3.Connection, table: str, md5_list: list[st
 def _parse_message_xml(content: str | bytes | None, local_type: int, is_group: bool):
     if content is None or isinstance(content, bytes):
         return None, REASON_UNSUPPORTED_MESSAGE_TYPE
-    _, body = _parse_message_content(content, local_type, is_group)
+    if content.lstrip().startswith("<"):
+        body = content
+    else:
+        _, body = _parse_message_content(content, local_type, is_group)
     root = _parse_xml_root(body.strip())
     if root is None:
         return None, REASON_MALFORMED_XML

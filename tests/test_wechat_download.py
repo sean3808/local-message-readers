@@ -554,6 +554,84 @@ def test_download_duplicates_identical_vs_distinct_and_missing_candidates(
     assert o3["items"][0]["status"] == "resolved"
 
 
+def test_download_image_mixed_plaintext_and_v2_is_ambiguous_and_identical_pairs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = _shard_db_path(tmp_path, 0)
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    d1 = msg_root / "attach" / ("d" * 32) / "2026-10" / "Img"
+    d2 = msg_root / "attach" / ("d" * 32) / "2026-11" / "Img"
+    d1.mkdir(parents=True)
+    d2.mkdir(parents=True)
+
+    # Mixed plaintext JPEG + V2 .dat
+    (d1 / "mixed.dat").write_bytes(b"\xff\xd8\xff\xe0jpegdata")
+    (d2 / "mixed.dat").write_bytes(b"\x07\x08V2\x08\x07encrypted")
+
+    # Two identical V2 .dat
+    (d1 / "both_v2.dat").write_bytes(b"\x07\x08V2\x08\x07samev2")
+    (d2 / "both_v2.dat").write_bytes(b"\x07\x08V2\x08\x07samev2")
+
+    # Two identical JPEGs
+    (d1 / "both_jpg.dat").write_bytes(b"\xff\xd8\xff\xe0samejpg")
+    (d2 / "both_jpg.dat").write_bytes(b"\xff\xd8\xff\xe0samejpg")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, ?), (2, '2026-10'), (3, '2026-11')", ("d" * 32,))
+    for d2_id in (2, 3):
+        hl.execute(
+            "INSERT INTO image_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+            ("e111" * 8, 2, "mixed.dat", 1, d2_id),
+        )
+        hl.execute(
+            "INSERT INTO image_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+            ("e222" * 8, 2, "both_v2.dat", 1, d2_id),
+        )
+        hl.execute(
+            "INSERT INTO image_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+            ("e333" * 8, 2, "both_jpg.dat", 1, d2_id),
+        )
+    hl.commit()
+    hl.close()
+
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 620, 3, 1794285100, f'<msg><img md5="{"e111" * 8}" /></msg>')
+    _add_msg(mconn, 621, 3, 1794285200, f'<msg><img md5="{"e222" * 8}" /></msg>')
+    _add_msg(mconn, 622, 3, 1794285300, f'<msg><img md5="{"e333" * 8}" /></msg>')
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    c_mix, o_mix = _run_download(tmp_path, 620, "wxid_alice", dest, capsys)
+    assert c_mix == 1
+    assert o_mix["items"] == [{
+        "kind": "image",
+        "status": "ambiguous",
+        "reason": wechat_media.REASON_MULTIPLE_DISTINCT_FILES,
+    }]
+    assert list(dest.iterdir()) == []
+
+    c_v2, o_v2 = _run_download(tmp_path, 621, "wxid_alice", dest, capsys)
+    assert c_v2 == 1
+    assert o_v2["items"] == [{
+        "kind": "image",
+        "status": "encrypted_unsupported",
+        "reason": wechat_media.REASON_ENCRYPTED_IMAGE,
+    }]
+    assert list(dest.iterdir()) == []
+
+    c_jpg, o_jpg = _run_download(tmp_path, 622, "wxid_alice", dest, capsys)
+    assert c_jpg == 0
+    assert len(o_jpg["items"]) == 1
+    assert o_jpg["items"][0]["status"] == "resolved"
+    assert o_jpg["items"][0]["name"] == "both_jpg.jpg"
+    assert (dest / "both_jpg.jpg").read_bytes() == b"\xff\xd8\xff\xe0samejpg"
+
+
 def test_download_hash_file_oserror_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -650,6 +728,39 @@ def test_download_unsupported_and_group_prefix_xml(
     code_ok, out_ok = _run_download(tmp_path, 706, "1001@chatroom", dest, capsys)
     assert code_ok == 0
     assert out_ok["items"][0]["name"] == "group_doc.txt"
+
+
+def test_download_group_xml_without_prefix_containing_colon_newline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = _shard_db_path(tmp_path, 0)
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE_GROUP)], is_group=True
+    )
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "no_prefix.txt").write_bytes(b"no prefix body")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "7778" * 8, "no_prefix.txt")
+    hl.commit()
+    hl.close()
+
+    xml_with_colon_nl = f"<msg><appmsg><type>6</type><des>note:\nline2</des><md5>{'7778' * 8}</md5></appmsg></msg>"
+    mconn = _make_msg_db(msg_db, MSG_TABLE_GROUP)
+    _add_msg(mconn, 707, 49, 1794285700, xml_with_colon_nl, table=MSG_TABLE_GROUP)
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 707, "1001@chatroom", dest, capsys)
+    assert code == 0
+    assert out["items"][0]["name"] == "no_prefix.txt"
+    assert (dest / "no_prefix.txt").read_bytes() == b"no prefix body"
 
 
 def test_download_unsafe_xml_doctype_rejected(
