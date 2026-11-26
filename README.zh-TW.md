@@ -64,7 +64,7 @@ uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
 ```
 
-reader 不會記得已經給你看過什麼；`recent` 的 `--since` 時間由呼叫的人自己記。最穩的做法是把上次讀到最後一則訊息的 `time` 原樣傳回去：它帶著時差，電腦換了時區也還是指向同一個時刻。沒寫時差的時間會當成這台電腦的當地時間。公眾號（訂閱號、服務號）不會出現在 `conversations`、`search` 與 `recent` 的結果裡。
+reader 不會記得已經給你看過什麼；`recent` 的 `--since` 時間由呼叫的人自己記。最穩的做法是把上次讀到最後一則訊息的 `time` 原樣傳回去：它帶著時差，電腦換了時區也還是指向同一個時刻。沒寫時差的時間會當成這台電腦的當地時間。公眾號（訂閱號、服務號）不會出現在 `conversations`、`search` 與 `recent` 的結果裡。若想在 `recent` 略過雜訊對話（例如遊戲群組），可在 `settings.toml` 的 `wechat_exclude_conversations` 填入對話 ID；排除會在 `--limit` 之前執行，並以 `excluded_messages` 回報整個時間範圍內被排除的訊息數（`conversations`、`messages` 與 `search` 仍會回傳這些對話）。
 
 ### 3. Teams：第一次同步
 
@@ -75,9 +75,9 @@ cd <repo>
 uv run teams-reader conversations
 ```
 
-看輸出 JSON 裡的 `refresh.status` 與 `refresh.current_up_to`：它們會告訴你同步是否成功、資料新到什麼時候。若距離同一個 Teams 設定檔上次乾淨的更新（成功且沒有 `failures`）不到 `refresh_min_interval_seconds`（預設 `120` 秒，設在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，設為 `0` 則每次都更新），會略過更新（`refresh.status` 為 `"skipped"` 並附帶 `refresh.reason`）。加 `--refresh` 可強制更新，加 `--no-refresh` 會一律略過（同時傳兩者會報錯）。如果有 Teams 官方匯出檔可以補更早的歷史，用 `uv run teams-reader import-export <匯出檔>` 匯入（匯入前先備份，見步驟 5）。查詢不會改變 Teams 裡的未讀狀態；但你自己在 Teams 裡打開某個對話，Teams 還是會把它標成已讀。
+看輸出 JSON 裡的 `refresh.status` 與 `refresh.current_up_to`：它們會告訴你同步是否成功、資料新到什麼時候。若距離同一個 Teams 設定檔上次乾淨的更新（成功且沒有 `failures`）不到 `refresh_min_interval_seconds`（預設 `120` 秒，設在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，設為 `0` 則每次都更新），會略過更新（`refresh.status` 為 `"skipped"` 並附帶 `refresh.reason`）。加 `--refresh` 可強制更新，加 `--no-refresh` 會一律略過（同時傳兩者會報錯）；做多步查詢時，可以在一次 `search` 中傳入多個關鍵字，或先用 `--refresh` 更新一次，後續查詢再加 `--no-refresh`。`messages` 與 `search` 都會保留最新的 `--limit` 筆結果（依由舊到新排列）並回報 `truncated`。如果有 Teams 官方匯出檔可以補更早的歷史，用 `uv run teams-reader import-export <匯出檔>` 匯入（匯入前先備份，見步驟 5）。查詢不會改變 Teams 裡的未讀狀態；但你自己在 Teams 裡打開某個對話，Teams 還是會把它標成已讀。
 
-如果設定檔資料夾不在標準位置，在 `%LOCALAPPDATA%\local-message-readers\settings.toml` 設 `profile_dir`，或加 `--profile-dir` 參數。
+如果設定檔資料夾不在標準位置，在 `%LOCALAPPDATA%\local-message-readers\settings.toml` 設 `profile_dir`，或加 `--profile-dir` 參數。若想在 `recent` 略過雜訊對話，可在 `settings.toml` 的 `teams_exclude_conversations` 填入對話 ID；排除會在 `--limit` 之前執行，並以 `excluded_messages` 回報整個時間範圍內被排除的訊息數（`conversations`、`messages` 與 `search` 仍會回傳這些對話）。
 
 依顯示名稱查詢對話時，若有多個一對一對話同名且 `last_time` 各自不同，`teams-reader` 會自動選取最新的一個，並把其餘候選列在 `alternatives`（`[{id, last_time}]`）；若其中包含群組或有兩個 `last_time` 相同，仍會回傳錯誤並列出各個 `id` 供指定。
 

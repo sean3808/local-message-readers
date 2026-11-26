@@ -65,6 +65,11 @@ def _is_empty_placeholder(key: Any, value: Any) -> bool:
 UNKNOWN_KEY = object()
 """Marker added to `failed_keys` when a record failed before its key could be read."""
 
+_UNKNOWN_KEY_ERROR = (
+    "The cache has corrupt records of unidentifiable origin, "
+    "so it cannot be determined which messages are trustworthy"
+)
+
 
 def _plain_key(key_raw: Any) -> Any:
     if isinstance(key_raw, tuple):
@@ -228,6 +233,11 @@ def _normalize_replychains(
     return messages
 
 
+def _tainted_conversation_ids(failed_keys: set[Any]) -> set[Any]:
+    """Extract conversation IDs from failed replychain keys."""
+    return {k[0] if isinstance(k, tuple) else k for k in failed_keys}
+
+
 def read_cache_messages(profile_dir: Path, failures: list[str]) -> list[dict[str, Any]]:
     """Read a fresh snapshot without ingesting or changing archive state.
 
@@ -242,8 +252,8 @@ def read_cache_messages(profile_dir: Path, failures: list[str]) -> list[dict[str
         records = load_latest_replychain_records(leveldb, blob, failures, failed_keys)
         messages = _normalize_replychains(records, failures, report_degraded=False)
     if UNKNOWN_KEY in failed_keys:
-        raise SnapshotError("The cache has corrupt records of unidentifiable origin, so it cannot be determined which messages are trustworthy: " + "; ".join(failures))
-    tainted = {k[0] if isinstance(k, tuple) else k for k in failed_keys}
+        raise SnapshotError(f"{_UNKNOWN_KEY_ERROR}: " + "; ".join(failures))
+    tainted = _tainted_conversation_ids(failed_keys)
     return [m for m in messages if m.get("conversation_id") not in tainted]
 
 
@@ -309,16 +319,25 @@ def ingest_cache(
         )
 
         # 2. Import messages: missing or unreadable replychains = refresh failure (already imported conversations are kept)
+        failed_keys: set[Any] = set()
         try:
             latest_replychains = load_latest_replychain_records(
-                temp_leveldb, temp_blob, failures=failures
+                temp_leveldb, temp_blob, failures=failures, failed_keys=failed_keys
             )
         except Exception as e:  # noqa: BLE001
             err = f"Failed to parse the Teams replychains snapshot: {e}"
             failures.append(err)
             return IngestOutcome(success=False, failures=failures, error=err)
 
+        if UNKNOWN_KEY in failed_keys:
+            err = _UNKNOWN_KEY_ERROR
+            failures.append(err)
+            return IngestOutcome(success=False, failures=failures, error=err)
+
         all_norm_messages = _normalize_replychains(latest_replychains, failures)
+        tainted = _tainted_conversation_ids(failed_keys)
+        if tainted:
+            all_norm_messages = [m for m in all_norm_messages if m.get("conversation_id") not in tainted]
 
         if all_norm_messages:
             archive.ingest_messages(

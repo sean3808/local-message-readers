@@ -260,7 +260,7 @@ def test_message_present_only_via_export_import_does_not_count_as_in_cache(tmp_p
     export = _export_file(tmp_path, [("8:bob", [_exp(T + 1000), _exp(T + 2000), _exp(T + 3000)])])
 
     import_export(arc, export)  # the merged messages now contain T+2000 (its sources are export only)
-    merged_ids = {m["id"] for m in arc.query_messages("teams", cache_id, limit=None)}
+    merged_ids = {m["id"] for m in arc.query_messages("teams", cache_id, limit=None)[0]}
     assert str(T + 2000) in merged_ids
 
     res = reconcile_export(arc, export)

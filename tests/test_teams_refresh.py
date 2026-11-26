@@ -89,7 +89,7 @@ def test_refresh_ingests_messages(tmp_path: Path) -> None:
         outcome = ingest_cache(arc, _profile(tmp_path))
 
     assert outcome.success, outcome
-    msgs = arc.query_messages(channel="teams", conversation_id=CONV_ID)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=CONV_ID)
     assert [m["id"] for m in msgs] == ["m1"]
     assert arc.get_data_current_up_to("teams") is not None
 
@@ -132,7 +132,7 @@ def test_cache_record_without_id_is_skipped_and_reported(tmp_path: Path) -> None
     with patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(True, mm)):
         outcome = ingest_cache(arc, _profile(tmp_path))
 
-    assert [m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)] == ["m1"]
+    assert [m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)[0]] == ["m1"]
     missing = [f for f in outcome.failures if CONV_ID in f and ("id='x'" in f or "id='y'" in f)]
     assert len(missing) == 2, outcome.failures
 
@@ -144,7 +144,7 @@ def test_cache_non_dict_message_entry_is_reported(tmp_path: Path) -> None:
         outcome = ingest_cache(arc, _profile(tmp_path))
 
     assert outcome.success
-    assert [m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)] == ["m1"]
+    assert [m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)[0]] == ["m1"]
     bad = [f for f in outcome.failures if CONV_ID in f and "id='bad'" in f]
     assert len(bad) == 1, outcome.failures
     assert "not-a-dict" not in bad[0]
@@ -161,9 +161,9 @@ def test_quoted_preview_keeps_link_target_and_is_searchable(tmp_path: Path) -> N
     with patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(True, mm)):
         ingest_cache(arc, _profile(tmp_path))
 
-    msgs = arc.query_messages(channel="teams", conversation_id=CONV_ID)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=CONV_ID)
     assert "https://example.com/x" in msgs[0]["quoted"]["text"]
-    hits = arc.search_messages("teams", "example.com/x")
+    hits, _ = arc.search_messages("teams", "example.com/x")
     assert [h["id"] for h in hits] == ["m1"]
     assert hits[0]["hit_in_quote"] is True
 
@@ -175,7 +175,7 @@ def test_cache_undecodable_files_property_is_kept_and_reported(tmp_path: Path) -
         outcome = ingest_cache(arc, _profile(tmp_path))
 
     assert outcome.success, outcome
-    msgs = arc.query_messages(channel="teams", conversation_id=CONV_ID)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=CONV_ID)
     assert [m["id"] for m in msgs] == ["m1"]
     assert msgs[0]["files"] == []
     hits = [f for f in outcome.failures if "files" in f and "id='m1'" in f]
@@ -189,7 +189,7 @@ def test_cache_files_valid_json_but_not_list_is_reported(tmp_path: Path) -> None
     with patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(True, mm)):
         outcome = ingest_cache(arc, _profile(tmp_path))
 
-    msgs = arc.query_messages(channel="teams", conversation_id=CONV_ID)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=CONV_ID)
     assert [m["id"] for m in msgs] == ["m1"]
     assert msgs[0]["files"] == []
     hits = [f for f in outcome.failures if "files" in f and "id='m1'" in f]
@@ -207,7 +207,7 @@ def test_cache_bad_properties_and_missing_time_are_reported(tmp_path: Path) -> N
     with patch("readers.teams.snapshot.WrappedIndexDB", _fake_wrapped(True, {"m1": bad_props, "m2": no_time})):
         outcome = ingest_cache(arc, _profile(tmp_path))
 
-    assert sorted(m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)) == ["m1", "m2"]
+    assert sorted(m["id"] for m in arc.query_messages(channel="teams", conversation_id=CONV_ID)[0]) == ["m1", "m2"]
     assert len([f for f in outcome.failures if "properties" in f and "id='m1'" in f]) == 1, outcome.failures
     assert len([f for f in outcome.failures if "time" in f and "id='m2'" in f]) == 1, outcome.failures
 

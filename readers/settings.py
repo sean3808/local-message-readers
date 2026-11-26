@@ -22,6 +22,8 @@ _SCHEMA = {
     "backup_dest": str,
     "teams_self_id": str,
     "refresh_min_interval_seconds": int,
+    "wechat_exclude_conversations": list[str],
+    "teams_exclude_conversations": list[str],
     "commit_blocklist": str,
     "commit_blocklist_public": list[str],
     "smoke": {

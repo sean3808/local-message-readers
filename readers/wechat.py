@@ -33,7 +33,7 @@ from wechat_cli.core.messages import (
     validate_pagination,
 )
 
-from readers.settings import SETTINGS_HELP
+from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.timeparse import FORMATS_HELP, parse_time_range
 
@@ -87,22 +87,23 @@ def _message(row, ctx, names, id_to_username, self_id, app):
     }
 
 
-def _keyword_matches(conn, table_name, is_group, keyword, start_ts, end_ts, limit):
+def _keyword_matches(conn, table_name, is_group, keywords, start_ts, end_ts, limit):
     """Keyword search, not the upstream SQL LIKE: it treats % and _ as wildcards and cannot match content stored zstd-compressed.
 
-    Matching rule: literal match, case-insensitive for ASCII letters only (same as SQLite lower(), so the SQL pre-filter and the Python match agree).
+    Matching rule: literal OR match across keywords, case-insensitive for ASCII letters only (same as SQLite lower(), so the SQL pre-filter and the Python match agree).
     Uncompressed rows are pre-filtered literally with instr; compressed rows (mostly links, files, long text) are decompressed and then matched.
     Compressed rows are inspected only for text, links/files and system messages; the compressed content of images, stickers and videos is media metadata (URLs, md5), and matching it only adds noise.
     """
     if not _is_safe_msg_table_name(table_name):
         raise ValueError(f"Invalid message table name: {table_name}")
-    needle = keyword.translate(_ASCII_LOWER)
+    needles = [(kw, kw.translate(_ASCII_LOWER)) for kw in keywords]
     clauses, params = _build_message_filters(start_ts, end_ts)
-    clauses.append("""(
-        (IFNULL(WCDB_CT_message_content, 0) != 4 AND instr(lower(message_content), ?) > 0)
+    instr_clauses = " OR ".join("instr(lower(message_content), ?) > 0" for _ in needles)
+    clauses.append(f"""(
+        (IFNULL(WCDB_CT_message_content, 0) != 4 AND ({instr_clauses}))
         OR (WCDB_CT_message_content = 4 AND (local_type & 0xFFFFFFFF) IN (1, 49, 10000))
     )""")
-    params.append(needle)
+    params.extend(needle for _, needle in needles)
     matches = []
     for row in conn.execute(f"""
         SELECT local_id, local_type, create_time, real_sender_id, message_content, WCDB_CT_message_content
@@ -110,15 +111,20 @@ def _keyword_matches(conn, table_name, is_group, keyword, start_ts, end_ts, limi
     """, params):
         # Group message content is prefixed with the sender id; strip it before matching, otherwise the id itself would match
         _, body = _parse_message_content(decompress_content(row[4], row[5]), row[1], is_group)
-        if body and needle in body.translate(_ASCII_LOWER):
-            matches.append(row)
-            if len(matches) >= limit:
-                break
+        if body:
+            body_lower = body.translate(_ASCII_LOWER)
+            matched = [kw for kw, needle in needles if needle in body_lower]
+            if matched:
+                matches.append((row, matched))
+                if len(matches) >= limit:
+                    break
     return matches
 
 
-def _collect(app, table_contexts, limit, offset, start_ts=None, end_ts=None, keyword=""):
-    """Take limit+offset raw rows from each table, sort globally by time and slice the page, then format only the page that remains."""
+def _collect(app, table_contexts, limit, offset, start_ts=None, end_ts=None, keywords=None):
+    """Take limit+offset+1 raw rows from each table, sort globally by time, detect truncation, slice the page, then format only the page that remains."""
+    kw_list = list(keywords) if keywords else []
+    fetch_limit = limit + offset + 1
     candidates, failures = [], []
     by_db = {}
     for tc in table_contexts:
@@ -128,28 +134,45 @@ def _collect(app, table_contexts, limit, offset, start_ts=None, end_ts=None, key
             with closing(sqlite3.connect(db_path)) as conn:
                 id_to_username = _load_name2id_maps(conn)
                 for tc in contexts:
-                    if keyword:
-                        rows = _keyword_matches(conn, tc["table_name"], tc["is_group"], keyword, start_ts, end_ts,
-                                                limit + offset)
+                    if kw_list:
+                        rows = _keyword_matches(conn, tc["table_name"], tc["is_group"], kw_list, start_ts, end_ts,
+                                                fetch_limit)
+                        candidates.extend((row, tc, id_to_username, matched) for row, matched in rows)
                     else:
                         rows = _query_messages(conn, tc["table_name"], start_ts=start_ts, end_ts=end_ts,
-                                               limit=limit + offset)
-                    candidates.extend((row, tc, id_to_username) for row in rows)
+                                               limit=fetch_limit)
+                        candidates.extend((row, tc, id_to_username, None) for row in rows)
         except Exception as e:  # noqa: BLE001
             failures.append(f"{db_path}: {e}")
     candidates.sort(key=lambda c: c[0][2], reverse=True)
+    if kw_list:
+        seen = set()
+        deduped = []
+        for item in candidates:
+            # local_id is unique only inside one message database: the same conversation can have a table in several of them
+            key = (item[1]["db_path"], item[1]["username"], item[0][0])
+            if key not in seen:
+                seen.add(key)
+                deduped.append(item)
+        candidates = deduped
+    truncated = len(candidates) > offset + limit
     page = candidates[offset:offset + limit]
     page.reverse()  # oldest to newest, matching reading order
 
     names = get_contact_names(app.cache, app.decrypted_dir)
     self_id = get_self_username(app.db_dir, app.cache, app.decrypted_dir)
     messages = []
-    for row, tc, id_to_username in page:
+    for row, tc, id_to_username, matched in page:
         try:
-            messages.append(_message(row, tc, names, id_to_username, self_id, app))
+            msg = _message(row, tc, names, id_to_username, self_id, app)
+            if matched is not None:
+                msg["conversation_name"] = tc["display_name"]
+                msg["is_group"] = tc["is_group"]
+                msg["matched_keywords"] = matched
+            messages.append(msg)
         except Exception as e:  # noqa: BLE001
             failures.append(f"{tc['username']} id={row[0]}: {e}")
-    return messages, failures
+    return messages, truncated, failures
 
 
 def list_conversations(app, limit):
@@ -194,42 +217,84 @@ def _resolve(app, conversation):
 def get_messages(app, conversation, limit, offset, start, end):
     start_ts, end_ts = parse_time_range(start, end)
     ctx = _resolve(app, conversation)
-    messages, failures = _collect(app, list(_iter_table_contexts(ctx)), limit, offset, start_ts, end_ts)
-    return {"conversation": _conversation(ctx), "messages": messages, "failures": failures}
+    messages, truncated, failures = _collect(app, list(_iter_table_contexts(ctx)), limit, offset, start_ts, end_ts)
+    return {"conversation": _conversation(ctx), "truncated": truncated, "messages": messages, "failures": failures}
+
+
+def _load_all_contexts(app):
+    names = get_contact_names(app.cache, app.decrypted_dir)
+    contexts, failures = [], []
+    for rel_key in app.msg_db_keys:
+        path = app.cache.get(rel_key)
+        if not path:
+            continue
+        try:
+            with closing(sqlite3.connect(path)) as conn:
+                # For a table that cannot be mapped to a conversation id, the results cannot be attributed; skip it
+                contexts.extend(
+                    c for c in _load_search_contexts_from_db(conn, path, names)
+                    if c["username"] and not is_official_account(c["username"])
+                )
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{rel_key}: {e}")
+    return contexts, failures
+
+
+def _count_messages(table_contexts, start_ts=None, end_ts=None):
+    clauses, params = _build_message_filters(start_ts, end_ts)
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    total, failures = 0, []
+    by_db = {}
+    for tc in table_contexts:
+        by_db.setdefault(tc["db_path"], []).append(tc)
+    for db_path, contexts in by_db.items():
+        try:
+            with closing(sqlite3.connect(db_path)) as conn:
+                for tc in contexts:
+                    table_name = tc["table_name"]
+                    if not _is_safe_msg_table_name(table_name):
+                        raise ValueError(f"Invalid message table name: {table_name}")
+                    total += conn.execute(f"SELECT COUNT(*) FROM [{table_name}] {where_sql}", params).fetchone()[0]
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{db_path}: {e}")
+    return total, failures
 
 
 def search(app, keyword, conversation, limit, start, end):
     start_ts, end_ts = parse_time_range(start, end)
+    kw_list = [keyword] if isinstance(keyword, str) else list(keyword)
+    kw_list = list(dict.fromkeys(kw for kw in kw_list if kw))
     failures = []
     if conversation:
         contexts = list(_iter_table_contexts(_resolve(app, conversation)))
     else:
-        names = get_contact_names(app.cache, app.decrypted_dir)
-        contexts = []
-        for rel_key in app.msg_db_keys:
-            path = app.cache.get(rel_key)
-            if not path:
-                continue
-            try:
-                with closing(sqlite3.connect(path)) as conn:
-                    # For a table that cannot be mapped to a conversation id, the results cannot be attributed; skip it
-                    contexts.extend(c for c in _load_search_contexts_from_db(conn, path, names)
-                                    if c["username"] and not is_official_account(c["username"]))
-            except Exception as e:  # noqa: BLE001
-                failures.append(f"{rel_key}: {e}")
-    messages, collect_failures = _collect(app, contexts, limit, 0, start_ts, end_ts, keyword=keyword)
-    return {"keyword": keyword, "messages": messages, "failures": failures + collect_failures}
+        contexts, failures = _load_all_contexts(app)
+    messages, truncated, collect_failures = _collect(app, contexts, limit, 0, start_ts, end_ts, keywords=kw_list)
+    out = {"keywords": kw_list, "truncated": truncated, "messages": messages, "failures": failures + collect_failures}
+    if len(kw_list) == 1:
+        out["keyword"] = kw_list[0]
+    return out
 
 
-def recent(app, since, limit):
+def recent(app, since, limit, exclude_conversations=None):
     # The reader does not keep a read position: the Local Agent remembers the last time it read up to and passes it back with --since next time (issue #2).
     # --since includes the boundary second, so messages in the same second are not missed but the previous last message reappears: the caller dedupes by (conversation_id, id)
 
     # Fetch one extra message to detect truncation; when truncated, keep the latest `limit` messages and the caller should raise --limit to read the rest
-    result = search(app, "", "", limit + 1, since, "")
-    messages = result["messages"]
-    return {"since": since, "truncated": len(messages) > limit, "messages": messages[-limit:],
-            "failures": result["failures"]}
+    start_ts, end_ts = parse_time_range(since, "")
+    excluded_ids = {cid for cid in (exclude_conversations or ()) if cid}
+    contexts, failures = _load_all_contexts(app)
+    included = [c for c in contexts if c["username"] not in excluded_ids]
+    excluded_contexts = [c for c in contexts if c["username"] in excluded_ids]
+    messages, truncated, collect_failures = _collect(app, included, limit, 0, start_ts, end_ts)
+    excluded_messages, count_failures = _count_messages(excluded_contexts, start_ts, end_ts)
+    return {
+        "since": since,
+        "truncated": truncated,
+        "excluded_messages": excluded_messages,
+        "messages": messages,
+        "failures": failures + collect_failures + count_failures,
+    }
 
 
 def _parser():
@@ -240,17 +305,17 @@ def _parser():
     c = sub.add_parser("conversations", help="List conversations by last message time")
     c.add_argument("--limit", type=int, default=20)
 
-    m = sub.add_parser("messages", help="Get the messages of a single conversation (oldest to newest)")
+    m = sub.add_parser("messages", help="Get the messages of a single conversation (newest N results, returned oldest to newest)")
     m.add_argument("conversation", help="Display name, remark name or id (such as wxid_xxx, xxx@chatroom)")
-    m.add_argument("--limit", type=int, default=50)
+    m.add_argument("--limit", type=int, default=50, help="Maximum number of newest results to keep, returned oldest to newest (default 50)")
     m.add_argument("--offset", type=int, default=0, help="How many messages to skip, counting back from the newest")
     m.add_argument("--start", default="", help=FORMATS_HELP)
     m.add_argument("--end", default="", help=FORMATS_HELP)
 
-    s = sub.add_parser("search", help="Search message content by keyword")
-    s.add_argument("keyword")
+    s = sub.add_parser("search", help="Search message content by one or more keywords (OR; newest N results, returned oldest to newest)")
+    s.add_argument("keywords", nargs="+", metavar="keyword", help="One or more search keywords (OR)")
     s.add_argument("--conversation", default="", help="Search only this conversation")
-    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--limit", type=int, default=20, help="Maximum number of newest results to keep, returned oldest to newest (default 20)")
     s.add_argument("--start", default="", help=FORMATS_HELP)
     s.add_argument("--end", default="", help=FORMATS_HELP)
 
@@ -262,14 +327,18 @@ def _parser():
 
 def _run(args):
     validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
+    if args.cmd == "search":
+        if any(not kw.strip() for kw in args.keywords):
+            raise ValueError("Search keyword must not be blank")
     app = AppContext()
     if args.cmd == "conversations":
         return list_conversations(app, args.limit)
     if args.cmd == "messages":
         return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end)
     if args.cmd == "recent":
-        return recent(app, args.since, args.limit)
-    return search(app, args.keyword, args.conversation, args.limit, args.start, args.end)
+        excluded = get_setting("wechat_exclude_conversations") or []
+        return recent(app, args.since, args.limit, exclude_conversations=excluded)
+    return search(app, args.keywords, args.conversation, args.limit, args.start, args.end)
 
 
 def main(argv=None):

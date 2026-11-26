@@ -40,12 +40,12 @@ def test_archive_migration_preserves_existing_data(tmp_path):
     path = tmp_path / 'archive.db'
     archive = Archive(path)
     archive.ingest_messages('teams', [{'id': '1', 'conversation_id': 'c', 'text': 'hello', 'version': 42}], 'cache')
-    before = archive.query_messages('teams', 'c')[0]
+    before = archive.query_messages('teams', 'c')[0][0]
     with sqlite3.connect(path) as conn:
         for table in ('messages', 'cache_messages'):
             conn.execute(f'ALTER TABLE {table} DROP COLUMN attachments')
         conn.execute('PRAGMA user_version = 1')
-    migrated = Archive(path).query_messages('teams', 'c')[0]
+    migrated = Archive(path).query_messages('teams', 'c')[0][0]
     assert migrated == before
 
 
@@ -58,7 +58,7 @@ def test_cache_backfills_same_version_without_conflict(tmp_path):
     archive.ingest_messages('teams', [old], 'export')
     failures = []
     archive.ingest_messages('teams', [message], 'cache', failures=failures)
-    result = archive.query_messages('teams', 'c')[0]
+    result = archive.query_messages('teams', 'c')[0][0]
     assert result['attachments'] == [{'name': 'x', 'url': 'url'}]
     assert result['version'] == message['version']
     assert failures == []
@@ -84,7 +84,7 @@ def test_same_version_missing_url_preserves_saved_link(tmp_path):
     base = {'id': '1', 'conversation_id': 'c', 'version': 2, 'files': ['x']}
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': 'link'}])], 'cache')
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': None}])], 'cache')
-    assert archive.query_messages('teams', 'c')[0]['attachments'] == [{'name': 'x', 'url': 'link'}]
+    assert archive.query_messages('teams', 'c')[0][0]['attachments'] == [{'name': 'x', 'url': 'link'}]
 
 
 def test_alias_merge_preserves_same_version_attachment(tmp_path):
@@ -93,7 +93,7 @@ def test_alias_merge_preserves_same_version_attachment(tmp_path):
         archive.ingest_messages('teams', [{'id': '1', 'conversation_id': cid, 'version': 2, 'files': ['x'], 'attachments': attachments}], 'cache')
     failures = []
     archive.merge_conversation_into('teams', 'old', 'new', failures=failures)
-    assert archive.query_messages('teams', 'new')[0]['attachments'] == [{'name': 'x', 'url': 'link'}]
+    assert archive.query_messages('teams', 'new')[0][0]['attachments'] == [{'name': 'x', 'url': 'link'}]
     assert failures == []
 
 
@@ -102,14 +102,14 @@ def test_same_named_attachments_keep_distinct_urls(tmp_path):
     base = {'id': '1', 'conversation_id': 'c', 'version': 2, 'files': ['x', 'x']}
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': 'a'}, {'name': 'x', 'url': 'b'}])], 'cache')
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': None}, {'name': 'x', 'url': None}])], 'cache')
-    assert archive.query_messages('teams', 'c')[0]['attachments'] == [{'name': 'x', 'url': 'a'}, {'name': 'x', 'url': 'b'}]
+    assert archive.query_messages('teams', 'c')[0][0]['attachments'] == [{'name': 'x', 'url': 'a'}, {'name': 'x', 'url': 'b'}]
 
 def test_reordered_same_named_attachments_use_same_index(tmp_path):
     archive = Archive(tmp_path / 'archive.db')
     base = {'id': '1', 'conversation_id': 'c', 'version': 2, 'files': ['x', 'x']}
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': 'a'}, {'name': 'x', 'url': 'b'}])], 'cache')
     archive.ingest_messages('teams', [dict(base, attachments=[{'name': 'x', 'url': 'b'}, {'name': 'x', 'url': None}])], 'cache')
-    assert archive.query_messages('teams', 'c')[0]['attachments'] == [{'name': 'x', 'url': 'b'}, {'name': 'x', 'url': 'b'}]
+    assert archive.query_messages('teams', 'c')[0][0]['attachments'] == [{'name': 'x', 'url': 'b'}, {'name': 'x', 'url': 'b'}]
 
 
 @pytest.mark.parametrize(('old', 'incoming', 'expected'), [
@@ -126,7 +126,7 @@ def test_same_version_attachment_merge_uses_incoming_shape(tmp_path, old, incomi
     base = {'id': '1', 'conversation_id': 'c', 'version': 2}
     archive.ingest_messages('teams', [dict(base, attachments=old)], 'cache')
     archive.ingest_messages('teams', [dict(base, attachments=incoming)], 'cache')
-    attachments = archive.query_messages('teams', 'c')[0]['attachments']
+    attachments = archive.query_messages('teams', 'c')[0][0]['attachments']
     assert attachments == expected
     assert len(attachments) == len(incoming)
 

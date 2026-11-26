@@ -24,7 +24,7 @@ def test_export_identity_uses_data_before_setting(tmp_path: Path, use_settings):
         {"id": "1", "from": "8:actual"}, {"id": "2", "from": "8:override"}]}]}), encoding="utf-8")
     archive = Archive(db_path=tmp_path / "archive.db")
     import_export(archive, path)
-    messages = {m["id"]: m for m in archive.query_messages("teams", "19:test", limit=None)}
+    messages = {m["id"]: m for m in archive.query_messages("teams", "19:test", limit=None)[0]}
     assert messages["1"]["is_self"] is True
     assert messages["2"]["is_self"] is False
 
@@ -44,7 +44,7 @@ def test_export_setting_is_used_only_when_identity_is_missing(tmp_path: Path, us
         {"id": "1", "from": "8:invented"}, {"id": "2", "from": "8:other"}]}]}), encoding="utf-8")
     archive = Archive(db_path=tmp_path / "archive.db")
     import_export(archive, path)
-    messages = {m["id"]: m for m in archive.query_messages("teams", "19:test", limit=None)}
+    messages = {m["id"]: m for m in archive.query_messages("teams", "19:test", limit=None)[0]}
     assert messages["1"]["is_self"] is True
     assert messages["2"]["is_self"] is False
 

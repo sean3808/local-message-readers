@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Collection, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1318,12 +1319,13 @@ class Archive:
         start: str | float | None = None,
         end: str | float | None = None,
         source: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Query the messages of a single conversation (oldest to newest).
 
         Supports a time range (--start/--end) and paging (--limit/--offset).
         Messages with the same timestamp are ordered by id, guaranteeing no duplicates or gaps across pages.
         If source='cache' is given, queries the raw content retained by the cache.
+        Returns (messages oldest to newest, truncated: bool).
         """
         table = "cache_messages" if source == "cache" else "messages"
         has_sources = table == "messages"
@@ -1350,18 +1352,24 @@ class Archive:
 
         query += " ORDER BY timestamp DESC, id DESC"
 
-        if limit is not None and limit > 0:
+        has_limit = limit is not None and limit > 0
+        if has_limit:
             query += " LIMIT ? OFFSET ?"
-            params.extend([limit, offset])
+            params.extend([limit + 1, offset])
         elif offset > 0:
             query += " LIMIT -1 OFFSET ?"
             params.append(offset)
 
-        results = []
         with closing(self._connect()) as conn:
-            results = [_row_to_message(r, has_sources=has_sources) for r in conn.execute(query, params)]
+            rows = conn.execute(query, params).fetchall()
+
+        truncated = has_limit and len(rows) > limit
+        if truncated:
+            rows = rows[:limit]
+
+        results = [_row_to_message(r, has_sources=has_sources) for r in rows]
         results.reverse()
-        return results
+        return results, truncated
 
     def find_messages_by_id(self, channel: str, message_id: str) -> list[dict[str, Any]]:
         """Query message ids of the given channel, keeping each conversation's candidates."""
@@ -1393,41 +1401,50 @@ class Archive:
     def search_messages(
         self,
         channel: str,
-        keyword: str,
+        keyword: str | Sequence[str],
         conversation_id: str | None = None,
         limit: int | None = 20,
         start: str | float | None = None,
         end: str | float | None = None,
-    ) -> list[dict[str, Any]]:
-        """Search messages by keyword (covers readable text, link targets, attachment file names and quoted content).
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Search messages by one or more keywords (OR semantics across readable text, link targets, attachment file names and quoted content).
 
-        If the hit is in quoted/forwarded content, hit_in_quote=True is set, otherwise False.
-        Returns the latest `limit` rows, sorted oldest to newest by time.
+        If a hit is in quoted/forwarded content, hit_in_quote=True is set, otherwise False.
+        Enriches each hit with conversation_name, is_group, and matched_keywords.
+        Returns (newest `limit` messages sorted oldest to newest, truncated: bool).
         """
-        if not keyword:
-            return []
+        raw_keywords = [keyword] if isinstance(keyword, str) else list(keyword)
+        keywords = list(dict.fromkeys(kw for kw in raw_keywords if kw))
+        if not keywords:
+            return [], False
 
-        # Escape SQL LIKE wildcards
-        escaped_kw = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped_kw}%"
+        kw_clauses = []
+        params: list[Any] = [channel]
+        for kw in keywords:
+            escaped_kw = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped_kw}%"
+            kw_clauses.append(
+                "(m.text LIKE ? ESCAPE '\\' "
+                "OR json_extract(m.quoted, '$.text') LIKE ? ESCAPE '\\' "
+                "OR json_extract(m.quoted, '$.author') LIKE ? ESCAPE '\\' "
+                "OR m.files LIKE ? ESCAPE '\\')"
+            )
+            params.extend([pattern, pattern, pattern, pattern])
 
-        query = """
-            SELECT id, conversation_id, time, timestamp, sender_id, sender,
-                   is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
-            FROM messages
-            WHERE channel = ?
-              AND deleted = 0
-              AND (
-                  text LIKE ? ESCAPE '\\'
-                  OR json_extract(quoted, '$.text') LIKE ? ESCAPE '\\'
-                  OR json_extract(quoted, '$.author') LIKE ? ESCAPE '\\'
-                  OR files LIKE ? ESCAPE '\\'
-              )
+        query = f"""
+            SELECT m.id, m.conversation_id, m.time, m.timestamp, m.sender_id, m.sender,
+                   m.is_self, m.type, m.text, m.version, m.deleted, m.edited, m.files, m.attachments, m.quoted, m.sources,
+                   c.name AS conversation_name, c.is_group AS conversation_is_group
+            FROM messages m
+            LEFT JOIN conversations c
+              ON c.channel = m.channel AND c.id = m.conversation_id
+            WHERE m.channel = ?
+              AND m.deleted = 0
+              AND ({" OR ".join(kw_clauses)})
         """
-        params: list[Any] = [channel, pattern, pattern, pattern, pattern]
 
         if conversation_id:
-            query += " AND conversation_id = ?"
+            query += " AND m.conversation_id = ?"
             params.append(conversation_id)
 
         start_ts = parse_time_bound(start, is_end=False)
@@ -1436,65 +1453,110 @@ class Archive:
             raise ValueError("start must not be later than end")
 
         if start_ts is not None:
-            query += " AND timestamp >= ?"
+            query += " AND m.timestamp >= ?"
             params.append(start_ts)
 
         if end_ts is not None:
-            query += " AND timestamp <= ?"
+            query += " AND m.timestamp <= ?"
             params.append(end_ts)
 
-        query += " ORDER BY timestamp DESC, id DESC"
+        query += " ORDER BY m.timestamp DESC, m.id DESC"
 
-        if limit is not None and limit > 0:
+        has_limit = limit is not None and limit > 0
+        if has_limit:
             query += " LIMIT ?"
-            params.append(limit)
+            params.append(limit + 1)
 
-        kw_lower = keyword.lower()
-        results = []
         with closing(self._connect()) as conn:
-            for r in conn.execute(query, params):
-                msg = _row_to_message(r, has_sources=True)
-                quoted = msg["quoted"]
-                hit_in_quote = False
-                if quoted and isinstance(quoted, dict):
-                    q_text = str(quoted.get("text") or "")
-                    q_author = str(quoted.get("author") or "")
-                    if kw_lower in q_text.lower() or kw_lower in q_author.lower():
+            rows = conn.execute(query, params).fetchall()
+
+        truncated = has_limit and len(rows) > limit
+        if truncated:
+            rows = rows[:limit]
+
+        kw_lowers = [(kw, kw.lower()) for kw in keywords]
+        results = []
+        for r in rows:
+            msg = _row_to_message(r, has_sources=True)
+            conv_name = r["conversation_name"]
+            msg["conversation_name"] = conv_name if conv_name is not None else msg["conversation_id"]
+            msg["is_group"] = bool(r["conversation_is_group"])
+
+            text_lower = (msg["text"] or "").lower()
+            files_lower = [str(f).lower() for f in (msg["files"] or [])]
+            quoted = msg["quoted"]
+            q_text_lower = ""
+            q_author_lower = ""
+            if quoted and isinstance(quoted, dict):
+                q_text_lower = str(quoted.get("text") or "").lower()
+                q_author_lower = str(quoted.get("author") or "").lower()
+
+            matched_keywords = []
+            hit_in_quote = False
+            for kw, kw_lower in kw_lowers:
+                in_quote = kw_lower in q_text_lower or kw_lower in q_author_lower
+                in_body = kw_lower in text_lower or any(kw_lower in f for f in files_lower)
+                if in_body or in_quote:
+                    matched_keywords.append(kw)
+                    if in_quote:
                         hit_in_quote = True
-                msg["hit_in_quote"] = hit_in_quote
-                results.append(msg)
+
+            msg["matched_keywords"] = matched_keywords
+            msg["hit_in_quote"] = hit_in_quote
+            results.append(msg)
 
         results.reverse()
-        return results
+        return results, truncated
 
     def query_recent_messages(
         self,
         channel: str,
         since: str | float,
         limit: int = 100,
-    ) -> tuple[list[dict[str, Any]], bool]:
+        exclude_conversations: Collection[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], bool, int]:
         """Query all messages (across all conversations) after a given time (boundary second included).
 
-        Determined by original send time; if the total exceeds limit, truncated to the latest `limit` rows,
-        and returns (messages oldest to newest, truncated: bool).
+        Determined by original send time; excludes any conversation in `exclude_conversations`
+        before applying `limit`. Returns (messages oldest to newest, truncated: bool, excluded_messages: int).
         """
         since_ts = parse_time_bound(since, is_end=False)
         if since_ts is None:
             raise ValueError(f"Invalid time format: '{since}'")
 
-        query = """
-            SELECT id, conversation_id, time, timestamp, sender_id, sender,
-                   is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
-            FROM messages
-            WHERE channel = ? AND timestamp >= ?
-            ORDER BY timestamp DESC, id DESC
-            LIMIT ?
-        """
+        excluded_ids = sorted({cid for cid in (exclude_conversations or ()) if cid})
         # Fetch one extra row to determine truncation
         fetch_limit = limit + 1 if limit > 0 else 101
 
+        exclude_clause = ""
+        query_params: tuple[Any, ...] = (channel, since_ts)
         with closing(self._connect()) as conn:
-            rows = conn.execute(query, (channel, since_ts, fetch_limit)).fetchall()
+            if excluded_ids:
+                placeholders = ", ".join("?" for _ in excluded_ids)
+                excluded_count = conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM messages
+                    WHERE channel = ? AND timestamp >= ? AND conversation_id IN ({placeholders})
+                    """,
+                    (channel, since_ts, *excluded_ids),
+                ).fetchone()[0]
+                exclude_clause = f" AND conversation_id NOT IN ({placeholders})"
+                query_params = (channel, since_ts, *excluded_ids)
+            else:
+                excluded_count = 0
+
+            rows = conn.execute(
+                f"""
+                SELECT id, conversation_id, time, timestamp, sender_id, sender,
+                       is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
+                FROM messages
+                WHERE channel = ? AND timestamp >= ?{exclude_clause}
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+                """,
+                (*query_params, fetch_limit),
+            ).fetchall()
 
         truncated = len(rows) > limit
         if truncated:
@@ -1502,4 +1564,4 @@ class Archive:
 
         results = [_row_to_message(r, has_sources=True) for r in rows]
         results.reverse()
-        return results, truncated
+        return results, truncated, excluded_count

@@ -34,6 +34,8 @@ def isolated_settings(tmp_path_factory, monkeypatch):
 def _toml_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (int, list)):
+        return json.dumps(value)
     return json.dumps(str(value))
 
 

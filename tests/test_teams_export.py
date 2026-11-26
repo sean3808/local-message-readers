@@ -46,7 +46,7 @@ def test_import_one_to_one_display_name_shown_without_id_and_counted_unknown(tmp
     path = tmp_path / "messages.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     result = import_export(temp_archive, path)
-    messages = {m["id"]: m for m in temp_archive.query_messages("teams", "19:uni01_test", limit=None)}
+    messages = {m["id"]: m for m in temp_archive.query_messages("teams", "19:uni01_test", limit=None)[0]}
     assert messages["1"]["sender_id"] == "8:self"
     assert messages["1"]["sender"] == "Self"
     assert messages["1"]["is_self"] is True
@@ -67,11 +67,11 @@ def test_duplicate_across_export_conversations_conflicts_but_reread_updates(tmp_
     write("first", "second")
     result = import_export(temp_archive, path)
     assert result["unorderable_conflicts"] == 1
-    assert temp_archive.query_messages("teams", "19:test")[0]["text"] == "first"
+    assert temp_archive.query_messages("teams", "19:test")[0][0]["text"] == "first"
     write("updated", "updated")
     result = import_export(temp_archive, path)
     assert result["unorderable_conflicts"] == 0
-    assert temp_archive.query_messages("teams", "19:test")[0]["text"] == "updated"
+    assert temp_archive.query_messages("teams", "19:test")[0][0]["text"] == "updated"
 
 
 @pytest.fixture
@@ -257,7 +257,7 @@ def test_cross_source_version_precedence_and_sources(temp_archive: Archive) -> N
         source="export",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "final text in export"
     assert msgs[0]["edited"] is True
@@ -290,7 +290,7 @@ def test_cross_source_version_precedence_and_sources(temp_archive: Archive) -> N
         }],
         source="export",
     )
-    msgs_after = temp_archive.query_messages(channel="teams", conversation_id=cid)
+    msgs_after, _ = temp_archive.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs_after) == 1
     assert msgs_after[0]["text"] == "newer cache update"
 
@@ -333,7 +333,7 @@ def test_v1_legacy_row_not_overwritten_by_older_export(tmp_path: Path) -> None:
         messages=[_cache_row(cid, mid, 1765867388.954, 1765867388954.0, False, "2025 older export message")],
         source="export",
     )
-    msgs = arc.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "2026 cache message with legacy seq_no"
     assert set(msgs[0]["sources"]) == {"cache", "export"}
@@ -357,7 +357,7 @@ def test_v1_legacy_deleted_row_not_resurrected_by_older_export(tmp_path: Path) -
         messages=[_cache_row(cid, mid, 1765867388.0, 1765867388954.0, False, "resurrected text from export")],
         source="export",
     )
-    msgs = arc.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["deleted"] is True
     assert msgs[0]["text"] == ""
@@ -376,7 +376,7 @@ def test_v1_row_already_rewritten_to_send_time_gets_observation_version(tmp_path
     )
     arc = _reopen_as_unmigrated(db_path)
 
-    msg = arc.query_messages(channel="teams", conversation_id=cid)[0]
+    msg = arc.query_messages(channel="teams", conversation_id=cid)[0][0]
     assert msg["version"] > 1765867388954.0
     assert msg["deleted"] is True
 
@@ -400,7 +400,7 @@ def test_v1_legacy_row_newer_export_edit_wins(tmp_path: Path) -> None:
         messages=[_cache_row(cid, mid, 1786348298.039, far_future_ms, False, "after edit in export")],
         source="export",
     )
-    msgs = arc.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = arc.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "after edit in export"
     assert msgs[0]["version"] == far_future_ms
@@ -418,7 +418,7 @@ def test_newer_undeleted_version_wins_over_deleted(temp_archive: Archive) -> Non
         messages=[_cache_row(cid, mid, 1765867388.954, 1765867500000.0, False, "restored")],
         source="export",
     )
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["deleted"] is False
     assert msgs[0]["text"] == "restored"
@@ -434,7 +434,7 @@ def test_v1_migration_runs_only_once(tmp_path: Path) -> None:
         channel="teams", messages=[_cache_row(cid, mid, 1786348298.039, 6348150.0, False, "x")], source="cache"
     )
     arc = _reopen_as_unmigrated(db_path)
-    migrated_version = arc.query_messages(channel="teams", conversation_id=cid)[0]["version"]
+    migrated_version = arc.query_messages(channel="teams", conversation_id=cid)[0][0]["version"]
     assert migrated_version > 6348150.0
 
     with closing(sqlite3.connect(db_path)) as conn:
@@ -443,7 +443,7 @@ def test_v1_migration_runs_only_once(tmp_path: Path) -> None:
         conn.commit()
 
     arc2 = Archive(db_path=db_path)
-    assert arc2.query_messages(channel="teams", conversation_id=cid)[0]["version"] == 5.0
+    assert arc2.query_messages(channel="teams", conversation_id=cid)[0][0]["version"] == 5.0
 
 
 def test_unorderable_conflict_reported_and_keeps_current(temp_archive: Archive) -> None:
@@ -488,7 +488,7 @@ def test_unorderable_conflict_reported_and_keeps_current(temp_archive: Archive) 
     )
 
     # Keep the current state
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=cid)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=cid)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "Current archive content"
     assert "cache" in msgs[0]["sources"]
@@ -568,7 +568,7 @@ def test_import_export_json_and_tar_streaming_no_duplicates(tmp_path: Path, temp
     assert res2["messages_before"] == res2["messages_after"]
 
     # Verify queries
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 5
     assert msgs[0]["text"] == "Synthetic message 0"
 
@@ -724,15 +724,15 @@ def test_one_to_one_export_conversation_merges_into_cache_conversation(
     assert "8:bob" not in conv_ids
     assert "8:carol" in conv_ids
 
-    msgs = temp_archive.query_messages("teams", "19:uni01_x", limit=None)
+    msgs, _ = temp_archive.query_messages("teams", "19:uni01_x", limit=None)
     ids = [m["id"] for m in msgs]
     assert sorted(ids) == ["1765000001000", "1765000002000", "1765000003000"]
     by_id = {m["id"]: m for m in msgs}
     assert sorted(by_id["1765000001000"]["sources"]) == ["cache", "export"]
     assert sorted(by_id["1765000002000"]["sources"]) == ["cache", "export"]
     assert by_id["1765000003000"]["sources"] == ["export"]
-    assert temp_archive.query_messages("teams", "8:bob") == []
-    assert len(temp_archive.query_messages("teams", "8:carol")) == 1
+    assert temp_archive.query_messages("teams", "8:bob")[0] == []
+    assert len(temp_archive.query_messages("teams", "8:carol")[0]) == 1
 
     # The merged conversation can be found by the old id and the old name
     assert temp_archive.get_conversation("teams", "8:bob")["id"] == "19:uni01_x"
@@ -758,7 +758,7 @@ def test_one_to_one_not_merged_without_user_id(tmp_path: Path, temp_archive: Arc
     assert res["one_to_one_mapped"] == 0
     assert res["one_to_one_unmapped"] == 2
     assert any("userId" in f for f in res["failures"])
-    msgs = temp_archive.query_messages("teams", "8:bob")
+    msgs, _ = temp_archive.query_messages("teams", "8:bob")
     assert len(msgs) == 3
     assert all(m["is_self"] is False for m in msgs)
 
@@ -780,7 +780,7 @@ def test_self_identity_comes_from_user_id_in_tar_stream(tmp_path: Path, temp_arc
 
     import_export(temp_archive, tar_path)
 
-    msgs = temp_archive.query_messages("teams", conv_id)
+    msgs, _ = temp_archive.query_messages("teams", conv_id)
     self_msgs = [m for m in msgs if m["is_self"]]
     assert len(self_msgs) == 2
     assert all(m["sender_id"] == "8:someone_else_entirely" for m in self_msgs)
@@ -916,9 +916,9 @@ def test_ambiguous_candidates_resolved_by_shared_message_ids(tmp_path: Path, tem
     assert res["one_to_one_mapped"] == 1
     assert res["one_to_one_unmapped"] == 0
     assert res["failures"] == []
-    ids_b = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_b", limit=None))
+    ids_b = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_b", limit=None)[0])
     assert ids_b == ["1765000001000", "1765000002000"]
-    assert [m["id"] for m in temp_archive.query_messages("teams", "19:uni01_a", limit=None)] == ["1765000099000"]
+    assert [m["id"] for m in temp_archive.query_messages("teams", "19:uni01_a", limit=None)[0]] == ["1765000099000"]
     assert temp_archive.get_conversation("teams", "8:bob")["id"] == "19:uni01_b"
 
 
@@ -936,7 +936,7 @@ def test_ambiguous_candidates_without_shared_ids_not_merged(tmp_path: Path, temp
     assert res["one_to_one_mapped"] == 0
     assert res["one_to_one_unmapped"] == 1
     assert len(res["failures"]) == 1
-    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)) == 2
+    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)[0]) == 2
 
 
 def test_member_list_without_self_needs_shared_ids_and_self_only_never(tmp_path: Path, temp_archive: Archive) -> None:
@@ -951,9 +951,9 @@ def test_member_list_without_self_needs_shared_ids_and_self_only_never(tmp_path:
 
     assert res["one_to_one_mapped"] == 0
     assert res["one_to_one_unmapped"] == 1
-    assert temp_archive.query_messages("teams", "19:uni01_x", limit=None) == []
-    assert temp_archive.query_messages("teams", "19:uni01_self") == []
-    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)) == 2
+    assert temp_archive.query_messages("teams", "19:uni01_x", limit=None)[0] == []
+    assert temp_archive.query_messages("teams", "19:uni01_self")[0] == []
+    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)[0]) == 2
 
 
 def test_member_list_without_self_with_shared_ids_merges(tmp_path: Path, temp_archive: Archive) -> None:
@@ -966,7 +966,7 @@ def test_member_list_without_self_with_shared_ids_merges(tmp_path: Path, temp_ar
 
     assert res["one_to_one_mapped"] == 1
     assert temp_archive.get_conversation("teams", "8:bob")["id"] == "19:uni01_x"
-    ids = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_x", limit=None))
+    ids = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_x", limit=None)[0])
     assert ids == ["1765000001000", "1765000002000"]
 
 
@@ -981,7 +981,7 @@ def test_zero_member_candidates_fall_back_to_shared_message_ids(tmp_path: Path, 
     assert res["one_to_one_mapped"] == 1
     assert res["one_to_one_unmapped"] == 0
     assert res["failures"] == []
-    ids = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_z", limit=None))
+    ids = sorted(m["id"] for m in temp_archive.query_messages("teams", "19:uni01_z", limit=None)[0])
     assert ids == ["1765000001000", "1765000002000"]
     assert temp_archive.get_conversation("teams", "8:bob")["id"] == "19:uni01_z"
     assert "8:bob" not in {c["id"] for c in temp_archive.query_conversations("teams")}
@@ -996,8 +996,8 @@ def test_zero_member_candidates_without_shared_ids_stay_unmapped(tmp_path: Path,
 
     assert res["one_to_one_mapped"] == 0
     assert res["one_to_one_unmapped"] == 1
-    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)) == 2
-    assert [m["id"] for m in temp_archive.query_messages("teams", "19:uni01_z", limit=None)] == ["1765000099000"]
+    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)[0]) == 2
+    assert [m["id"] for m in temp_archive.query_messages("teams", "19:uni01_z", limit=None)[0]] == ["1765000099000"]
 
 
 def test_existing_alias_is_reused_even_if_member_data_changed(tmp_path: Path, temp_archive: Archive) -> None:
@@ -1020,7 +1020,7 @@ def test_existing_alias_is_reused_even_if_member_data_changed(tmp_path: Path, te
     assert res["one_to_one_mapped"] == 1
     assert res["messages_new"] == 0
     assert temp_archive.get_alias_target("teams", "8:bob") == "19:uni01_x"
-    assert temp_archive.query_messages("teams", "19:uni01_y") == []
+    assert temp_archive.query_messages("teams", "19:uni01_y")[0] == []
 
 
 def test_late_mapping_moves_earlier_legacy_copy_without_duplicates(tmp_path: Path, temp_archive: Archive) -> None:
@@ -1028,7 +1028,7 @@ def test_late_mapping_moves_earlier_legacy_copy_without_duplicates(tmp_path: Pat
     export_file = _bob_only_export(tmp_path)
     res1 = import_export(temp_archive, export_file)
     assert res1["one_to_one_unmapped"] == 1
-    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)) == 2
+    assert len(temp_archive.query_messages("teams", "8:bob", limit=None)[0]) == 2
 
     temp_archive.ingest_conversations("teams", [_cache_conv("19:uni01_x", ["8:bob", "8:me"])], source="cache")
     temp_archive.ingest_messages(
@@ -1041,7 +1041,7 @@ def test_late_mapping_moves_earlier_legacy_copy_without_duplicates(tmp_path: Pat
     assert res2["messages_moved_from_legacy_ids"] == 2
     assert res2["failures"] == []
     assert "8:bob" not in {c["id"] for c in temp_archive.query_conversations("teams")}
-    msgs = temp_archive.query_messages("teams", "19:uni01_x", limit=None)
+    msgs, _ = temp_archive.query_messages("teams", "19:uni01_x", limit=None)
     assert sorted(m["id"] for m in msgs) == ["1765000001000", "1765000002000"]
     by_id = {m["id"]: m for m in msgs}
     assert sorted(by_id["1765000001000"]["sources"]) == ["cache", "export"]
@@ -1070,7 +1070,7 @@ def test_in_batch_equal_version_conflict_reported_once_first_row_kept(temp_archi
     assert stats["unorderable_conflicts"] == 1
     assert len(failures) == 1
     assert "first" not in failures[0] and "second" not in failures[0]
-    msgs = temp_archive.query_messages("teams", "19:c", limit=None)
+    msgs, _ = temp_archive.query_messages("teams", "19:c", limit=None)
     assert [m["text"] for m in msgs] == ["first"]
 
     # A higher version still wins silently
@@ -1078,7 +1078,7 @@ def test_in_batch_equal_version_conflict_reported_once_first_row_kept(temp_archi
     higher = {**first, "text": "third", "version": first["version"] + 1}
     temp_archive.ingest_messages("teams", [first, higher], source="cache", failures=failures2, stats={})
     assert failures2 == []
-    assert [m["text"] for m in temp_archive.query_messages("teams", "19:c", limit=None)] == ["third"]
+    assert [m["text"] for m in temp_archive.query_messages("teams", "19:c", limit=None)[0]] == ["third"]
 
 
 def test_export_messages_without_id_skipped_and_reported(tmp_path: Path, temp_archive: Archive) -> None:
@@ -1101,7 +1101,7 @@ def test_export_messages_without_id_skipped_and_reported(tmp_path: Path, temp_ar
     failures: list[str] = []
     import_export(temp_archive, _write_json(tmp_path / "messages.json", data), failures=failures)
 
-    assert [m["id"] for m in temp_archive.query_messages("teams", "19:noid")] == ["3"]
+    assert [m["id"] for m in temp_archive.query_messages("teams", "19:noid")[0]] == ["3"]
     assert len([f for f in failures if "19:noid" in f]) == 2, failures
 
 
@@ -1125,7 +1125,7 @@ def test_export_message_with_unparseable_time_is_kept_and_reported(
     failures: list[str] = []
     import_export(temp_archive, _write_json(tmp_path / "messages.json", data), failures=failures)
 
-    assert sorted(m["id"] for m in temp_archive.query_messages("teams", "19:badtime")) == ["1", "2"]
+    assert sorted(m["id"] for m in temp_archive.query_messages("teams", "19:badtime")[0]) == ["1", "2"]
     hits = [f for f in failures if "time" in f and "position=1" in f and "id='1'" in f]
     assert len(hits) == 1, failures
     assert "not-a-time" not in hits[0]
