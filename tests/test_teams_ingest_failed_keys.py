@@ -77,8 +77,8 @@ def test_ingest_cache_excludes_conversation_with_failed_key(tmp_path: Path, monk
 
     assert outcome.success
     assert any("stale" in f for f in outcome.failures), outcome.failures
-    assert arc.query_messages(channel="teams", conversation_id="stale") == []
-    ok_msgs = arc.query_messages(channel="teams", conversation_id="ok")
+    assert arc.query_messages(channel="teams", conversation_id="stale")[0] == []
+    ok_msgs, _ = arc.query_messages(channel="teams", conversation_id="ok")
     assert [m["id"] for m in ok_msgs] == ["m_ok"]
     assert ok_msgs[0]["text"] == "fresh text"
 

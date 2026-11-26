@@ -89,11 +89,11 @@ def test_channel_is_part_of_key(temp_archive: Archive) -> None:
         source="cache",
     )
 
-    teams_msgs = temp_archive.query_messages(channel="teams", conversation_id=shared_conv_id)
+    teams_msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=shared_conv_id)
     assert len(teams_msgs) == 1
     assert teams_msgs[0]["text"] == "Hello Teams"
 
-    wechat_msgs = temp_archive.query_messages(channel="wechat", conversation_id=shared_conv_id)
+    wechat_msgs, _ = temp_archive.query_messages(channel="wechat", conversation_id=shared_conv_id)
     assert len(wechat_msgs) == 1
     assert wechat_msgs[0]["text"] == "Hello WeChat"
 
@@ -283,7 +283,7 @@ def test_message_newest_version_wins(temp_archive: Archive) -> None:
         source="cache",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "edited message"
     assert msgs[0]["edited"] is True
@@ -306,7 +306,7 @@ def test_message_newest_version_wins(temp_archive: Archive) -> None:
         source="export",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 1
     assert msgs[0]["text"] == "edited message"
 
@@ -334,7 +334,7 @@ def test_batch_duplicate_keeps_highest_version_not_last(temp_archive: Archive) -
         source="cache",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id="conv_dup")
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id="conv_dup")
     assert len(msgs) == 1
     assert msgs[0]["text"] == "version two"
 
@@ -360,14 +360,14 @@ def test_same_source_reread_same_version_updates_without_conflict(temp_archive: 
     failures: list[str] = []
     temp_archive.ingest_messages("teams", [_msg("a", "new render")], source="cache", failures=failures)
     assert failures == []
-    msgs = {m["id"]: m for m in temp_archive.query_messages(channel="teams", conversation_id="conv_rn")}
+    msgs = {m["id"]: m for m in temp_archive.query_messages(channel="teams", conversation_id="conv_rn")[0]}
     assert msgs["a"]["text"] == "new render"
     assert temp_archive.get_cache_message("teams", "conv_rn", "a")["text"] == "new render"
 
     failures = []
     temp_archive.ingest_messages("teams", [_msg("b", "export text")], source="export", failures=failures)
     assert len(failures) == 1, failures
-    msgs = {m["id"]: m for m in temp_archive.query_messages(channel="teams", conversation_id="conv_rn")}
+    msgs = {m["id"]: m for m in temp_archive.query_messages(channel="teams", conversation_id="conv_rn")[0]}
     assert msgs["b"]["text"] == "cache text"
 
 
@@ -440,7 +440,7 @@ def test_deleted_message_not_resurrected_by_older_version(temp_archive: Archive)
         source="export",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 1
     assert msgs[0]["deleted"] is True
     assert msgs[0]["text"] == ""
@@ -480,7 +480,7 @@ def test_message_absent_from_later_ingest_remains(temp_archive: Archive) -> None
         source="cache",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 3
     assert [m["id"] for m in msgs] == ["m1", "m2", "m3"]
 
@@ -514,7 +514,7 @@ def test_sources_merged(temp_archive: Archive) -> None:
         source="export",
     )
 
-    msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(msgs) == 1
     assert "cache" in msgs[0]["sources"]
     assert "export" in msgs[0]["sources"]
@@ -578,7 +578,7 @@ def test_last_cache_version_retained(temp_archive: Archive) -> None:
     )
 
     # The main query presents the latest version (from export)
-    current_msgs = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
+    current_msgs, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id)
     assert len(current_msgs) == 1
     assert current_msgs[0]["text"] == "updated in export"
     assert current_msgs[0]["version"] == 2.0
@@ -590,7 +590,7 @@ def test_last_cache_version_retained(temp_archive: Archive) -> None:
     assert cache_msg["text"] == "content in cache"
     assert cache_msg["version"] == 1.0
 
-    cache_msgs_query = temp_archive.query_messages(channel="teams", conversation_id=conv_id, source="cache")
+    cache_msgs_query, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, source="cache")
     assert len(cache_msgs_query) == 1
     assert cache_msgs_query[0]["text"] == "content in cache"
     assert cache_msgs_query[0]["version"] == 1.0
@@ -608,9 +608,9 @@ def test_messages_same_timestamp_ordered_by_id_paging(temp_archive: Archive) -> 
     temp_archive.ingest_messages(channel="teams", messages=raw_msgs, source="cache")
 
     # Paged query: 2 per page
-    page1 = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=0)
-    page2 = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=2)
-    page3 = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=4)
+    page1, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=0)
+    page2, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=2)
+    page3, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=4)
 
     p1_ids = [m["id"] for m in page1]
     p2_ids = [m["id"] for m in page2]
@@ -650,9 +650,9 @@ def test_messages_pagination_newest_first_direction(temp_archive: Archive) -> No
     temp_archive.ingest_messages(channel="teams", messages=raw_msgs, source="cache")
 
     # Page 1: the latest 3 (offset=0)
-    page1 = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=3, offset=0)
+    page1, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=3, offset=0)
     # Page 2: the 3 before the latest 3 (offset=3)
-    page2 = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=3, offset=3)
+    page2, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=3, offset=3)
 
     p1_ids = [m["id"] for m in page1]
     p2_ids = [m["id"] for m in page2]
@@ -681,15 +681,15 @@ def test_messages_time_bounds(temp_archive: Archive) -> None:
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
     # Numeric timestamp range
-    res_middle = temp_archive.query_messages(channel="teams", conversation_id=conv_id, start=2000.0, end=3000.0)
+    res_middle, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, start=2000.0, end=3000.0)
     assert [m["id"] for m in res_middle] == ["m2", "m3"]
 
     # start only
-    res_start = temp_archive.query_messages(channel="teams", conversation_id=conv_id, start=2500.0)
+    res_start, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, start=2500.0)
     assert [m["id"] for m in res_start] == ["m3", "m4"]
 
     # end only
-    res_end = temp_archive.query_messages(channel="teams", conversation_id=conv_id, end=2500.0)
+    res_end, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, end=2500.0)
     assert [m["id"] for m in res_end] == ["m1", "m2"]
 
     # start > end must raise ValueError
@@ -716,7 +716,7 @@ def test_messages_date_only_end_bound(temp_archive: Archive) -> None:
     ]
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
-    res = temp_archive.query_messages(channel="teams", conversation_id=conv_id, end="2026-11-01")
+    res, _ = temp_archive.query_messages(channel="teams", conversation_id=conv_id, end="2026-11-01")
     assert [m["id"] for m in res] == ["m_day"]
 
 
@@ -984,56 +984,56 @@ def test_search_messages_covers_text_links_files_quoted_and_marks_quote_hit(temp
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
     # 1. Search hits plain text
-    r_txt = temp_archive.search_messages(channel="teams", keyword="apple")
+    r_txt, _ = temp_archive.search_messages(channel="teams", keyword="apple")
     assert len(r_txt) == 1
     assert r_txt[0]["id"] == "msg_txt"
     assert r_txt[0]["hit_in_quote"] is False
 
     # 2. Search hits a link target (URL)
-    r_link = temp_archive.search_messages(channel="teams", keyword="banana_guide")
+    r_link, _ = temp_archive.search_messages(channel="teams", keyword="banana_guide")
     assert len(r_link) == 1
     assert r_link[0]["id"] == "msg_link"
     assert r_link[0]["hit_in_quote"] is False
 
     # 3. Search hits an attachment file name
-    r_files = temp_archive.search_messages(channel="teams", keyword="cherry_report")
+    r_files, _ = temp_archive.search_messages(channel="teams", keyword="cherry_report")
     assert len(r_files) == 1
     assert r_files[0]["id"] == "msg_files"
     assert r_files[0]["hit_in_quote"] is False
 
     # 4. Search hits quoted content (hit_in_quote flag is True)
-    r_q_text = temp_archive.search_messages(channel="teams", keyword="proposal")
+    r_q_text, _ = temp_archive.search_messages(channel="teams", keyword="proposal")
     assert len(r_q_text) == 1
     assert r_q_text[0]["id"] == "msg_quote"
     assert r_q_text[0]["hit_in_quote"] is True
 
     # Search hits the quote author (hit_in_quote flag is True)
-    r_q_author = temp_archive.search_messages(channel="teams", keyword="Alice Smith")
+    r_q_author, _ = temp_archive.search_messages(channel="teams", keyword="Alice Smith")
     assert len(r_q_author) == 1
     assert r_q_author[0]["id"] == "msg_quote"
     assert r_q_author[0]["hit_in_quote"] is True
 
     # Search for a word that appears only in the reply body of a message that carries a quote (hit_in_quote flag is False)
-    r_body = temp_archive.search_messages(channel="teams", keyword="Thanks")
+    r_body, _ = temp_archive.search_messages(channel="teams", keyword="Thanks")
     assert len(r_body) == 1
     assert r_body[0]["id"] == "msg_quote"
     assert r_body[0]["hit_in_quote"] is False
 
     # 5. Deleted messages cannot be found by search
-    r_del = temp_archive.search_messages(channel="teams", keyword="msg_del")
+    r_del, _ = temp_archive.search_messages(channel="teams", keyword="msg_del")
     assert len(r_del) == 0
 
     # 6. Wildcards (% and _) are matched literally, not expanded
-    r_pct = temp_archive.search_messages(channel="teams", keyword="100%")
+    r_pct, _ = temp_archive.search_messages(channel="teams", keyword="100%")
     assert len(r_pct) == 1
     assert r_pct[0]["id"] == "msg_wildcard"
 
-    r_under = temp_archive.search_messages(channel="teams", keyword="path_test")
+    r_under, _ = temp_archive.search_messages(channel="teams", keyword="path_test")
     assert len(r_under) == 1
     assert r_under[0]["id"] == "msg_wildcard"
 
     # 7. Verify that JSON structure key names (such as "author") produce no false-positive hits
-    r_key = temp_archive.search_messages(channel="teams", keyword="author")
+    r_key, _ = temp_archive.search_messages(channel="teams", keyword="author")
     assert len(r_key) == 0
 
 
@@ -1048,17 +1048,17 @@ def test_search_messages_conversation_filter_and_time_bounds(temp_archive: Archi
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
     # No conversation specified: across all conversations
-    all_res = temp_archive.search_messages(channel="teams", keyword="target")
+    all_res, _ = temp_archive.search_messages(channel="teams", keyword="target")
     assert len(all_res) == 3
     # Sorted oldest to newest by time
     assert [m["id"] for m in all_res] == ["m1", "m3", "m2"]
 
     # Specify conversation_id=c1
-    c1_res = temp_archive.search_messages(channel="teams", keyword="target", conversation_id=c1)
+    c1_res, _ = temp_archive.search_messages(channel="teams", keyword="target", conversation_id=c1)
     assert [m["id"] for m in c1_res] == ["m1", "m2"]
 
     # Time range filter
-    time_res = temp_archive.search_messages(
+    time_res, _ = temp_archive.search_messages(
         channel="teams", keyword="target", start=1500.0, end=2500.0
     )
     assert len(time_res) == 1
@@ -1087,7 +1087,7 @@ def test_search_and_recent_across_multiple_ingests(temp_archive: Archive) -> Non
     temp_archive.ingest_messages(channel="teams", messages=ingest2, source="cache")
 
     # search across both ingests
-    results = temp_archive.search_messages(channel="teams", keyword="quote")
+    results, _ = temp_archive.search_messages(channel="teams", keyword="quote")
     assert len(results) == 4
     assert [m["id"] for m in results] == ["m_old_1", "m_old_2", "m_new_1", "m_new_2"]
 
@@ -1205,3 +1205,81 @@ def test_empty_successful_cache_snapshot_clears_unread(temp_archive: Archive) ->
     assert temp_archive.query_conversations("teams")[0]["unread"] is True
     temp_archive.ingest_conversations(channel="teams", conversations=[], source="cache")
     assert temp_archive.query_conversations("teams")[0]["unread"] is None
+
+
+def test_query_messages_truncation_with_offset(temp_archive: Archive) -> None:
+    """Seam B: query_messages returns (messages, truncated) respecting limit and offset."""
+    conv_id = "conv_msg_trunc"
+    msgs = [
+        {"conversation_id": conv_id, "id": f"m_{i}", "timestamp": float(i * 1000), "text": f"msg {i}"}
+        for i in range(1, 6)
+    ]
+    temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
+
+    # 1. limit=3 < total 5 -> truncated=True, newest 3 oldest-to-newest
+    res, trunc = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=3, offset=0)
+    assert trunc is True
+    assert [m["id"] for m in res] == ["m_3", "m_4", "m_5"]
+
+    # 2. limit=5 == total 5 -> truncated=False
+    res_eq, trunc_eq = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=5, offset=0)
+    assert trunc_eq is False
+    assert [m["id"] for m in res_eq] == ["m_1", "m_2", "m_3", "m_4", "m_5"]
+
+    # 3. offset=2, limit=2 -> 1 older row left -> truncated=True
+    res_off, trunc_off = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=2)
+    assert trunc_off is True
+    assert [m["id"] for m in res_off] == ["m_2", "m_3"]
+
+    # 4. offset=3, limit=2 -> exact end -> truncated=False
+    res_end, trunc_end = temp_archive.query_messages(channel="teams", conversation_id=conv_id, limit=2, offset=3)
+    assert trunc_end is False
+    assert [m["id"] for m in res_end] == ["m_1", "m_2"]
+
+
+def test_search_messages_multi_keyword_enrichment_and_truncation(temp_archive: Archive) -> None:
+    """Seam B: search_messages supports multi-keyword OR, deduplication, conversation enrichment, and truncated."""
+    temp_archive.ingest_conversations(
+        channel="teams",
+        conversations=[
+            {"id": "c_group", "name": "Ops Group", "is_group": True, "unread": False,
+             "last_time": "2026-11-10T10:00:00+08:00", "last_timestamp": 5000.0, "version": 1.0},
+            {"id": "c_dm", "name": "Bob Example", "is_group": False, "unread": False,
+             "last_time": "2026-11-10T10:00:00+08:00", "last_timestamp": 5000.0, "version": 1.0},
+        ],
+        source="cache",
+    )
+    msgs = [
+        {"conversation_id": "c_group", "id": "m1", "timestamp": 1000.0, "text": "alpha only"},
+        {"conversation_id": "c_dm", "id": "m2", "timestamp": 2000.0, "text": "beta only"},
+        {"conversation_id": "c_group", "id": "m3", "timestamp": 3000.0, "text": "alpha and beta together"},
+        {"conversation_id": "c_missing", "id": "m4", "timestamp": 4000.0, "text": "alpha in missing conv",
+         "quoted": {"author": "Carol", "text": "beta in quote"}},
+    ]
+    temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
+
+    # 1. Multi-keyword OR with duplicate input keyword, limit=3 < 4 -> truncated=True
+    hits, trunc = temp_archive.search_messages(channel="teams", keyword=["beta", "alpha", "beta"], limit=3)
+    assert trunc is True
+    assert [m["id"] for m in hits] == ["m2", "m3", "m4"]
+    assert hits[0]["conversation_name"] == "Bob Example"
+    assert hits[0]["is_group"] is False
+    assert hits[0]["matched_keywords"] == ["beta"]
+    assert hits[0]["hit_in_quote"] is False
+
+    assert hits[1]["conversation_name"] == "Ops Group"
+    assert hits[1]["is_group"] is True
+    assert hits[1]["matched_keywords"] == ["beta", "alpha"]
+    assert hits[1]["hit_in_quote"] is False
+
+    # Missing conversation falls back to conversation_id and is_group=False; hit_in_quote is True if any keyword hits quote
+    assert hits[2]["conversation_name"] == "c_missing"
+    assert hits[2]["is_group"] is False
+    assert hits[2]["matched_keywords"] == ["beta", "alpha"]
+    assert hits[2]["hit_in_quote"] is True
+
+    # 2. Exact equality limit=4 == 4 -> truncated=False
+    all_hits, trunc_all = temp_archive.search_messages(channel="teams", keyword=["alpha", "beta"], limit=4)
+    assert trunc_all is False
+    assert [m["id"] for m in all_hits] == ["m1", "m2", "m3", "m4"]
+

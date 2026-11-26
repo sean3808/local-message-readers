@@ -75,7 +75,7 @@ cd <repo>
 uv run teams-reader conversations
 ```
 
-看输出 JSON 里的 `refresh.status` 和 `refresh.current_up_to`：它们会告诉你同步是否成功、数据新到什么时候。若距离同一个 Teams 配置上次干净的更新（成功且没有 `failures`）不到 `refresh_min_interval_seconds`（默认 `120` 秒，配置在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，设为 `0` 则每次都更新），会跳过更新（`refresh.status` 为 `"skipped"` 并附带 `refresh.reason`）。加 `--refresh` 可强制更新，加 `--no-refresh` 会一律跳过（同时传两者会报错）。如果有 Teams 官方导出文件可以补充更早的历史，用 `uv run teams-reader import-export <导出文件>` 导入（导入前先备份，见第 5 步）。查询不会改变 Teams 里的未读状态；但你自己在 Teams 里打开某个会话，Teams 仍会把它标为已读。
+看输出 JSON 里的 `refresh.status` 和 `refresh.current_up_to`：它们会告诉你同步是否成功、数据新到什么时候。若距离同一个 Teams 配置上次干净的更新（成功且没有 `failures`）不到 `refresh_min_interval_seconds`（默认 `120` 秒，配置在 `%LOCALAPPDATA%\local-message-readers\settings.toml`，设为 `0` 则每次都更新），会跳过更新（`refresh.status` 为 `"skipped"` 并附带 `refresh.reason`）。加 `--refresh` 可强制更新，加 `--no-refresh` 会一律跳过（同时传两者会报错）；做多步查询时，可以在一次 `search` 中传入多个关键词，或先用 `--refresh` 更新一次，后续查询再加 `--no-refresh`。`messages` 和 `search` 都会保留最新的 `--limit` 条结果（按由旧到新排列）并报告 `truncated`。如果有 Teams 官方导出文件可以补充更早的历史，用 `uv run teams-reader import-export <导出文件>` 导入（导入前先备份，见第 5 步）。查询不会改变 Teams 里的未读状态；但你自己在 Teams 里打开某个会话，Teams 仍会把它标为已读。
 
 如果配置文件夹不在标准位置，在 `%LOCALAPPDATA%\local-message-readers\settings.toml` 里设置 `profile_dir`，或加 `--profile-dir` 参数。
 

@@ -144,10 +144,10 @@ def _parser() -> argparse.ArgumentParser:
     m = sub.add_parser(
         "messages",
         parents=[sub_common],
-        help="Get the messages of one conversation (oldest first)",
+        help="Get the messages of one conversation (newest N results, returned oldest to newest)",
     )
     m.add_argument("conversation", help="Display name or id")
-    m.add_argument("--limit", type=int, default=50, help="Maximum number of results (default 50)")
+    m.add_argument("--limit", type=int, default=50, help="Maximum number of newest results to keep, returned oldest to newest (default 50)")
     m.add_argument("--offset", type=int, default=0, help="Number of results to skip (default 0)")
     m.add_argument("--start", default="", help=f"Start time: {FORMATS_HELP}")
     m.add_argument("--end", default="", help=f"End time: {FORMATS_HELP}")
@@ -155,11 +155,11 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser(
         "search",
         parents=[sub_common],
-        help="Search message content by keyword",
+        help="Search message content by one or more keywords (OR; newest N results, returned oldest to newest)",
     )
-    s.add_argument("keyword", help="Search keyword")
+    s.add_argument("keywords", nargs="+", metavar="keyword", help="One or more search keywords (OR)")
     s.add_argument("--conversation", default="", help="Search only this conversation (display name or id)")
-    s.add_argument("--limit", type=int, default=20, help="Maximum number of results (default 20)")
+    s.add_argument("--limit", type=int, default=20, help="Maximum number of newest results to keep, returned oldest to newest (default 20)")
     s.add_argument("--start", default="", help=f"Start time: {FORMATS_HELP}")
     s.add_argument("--end", default="", help=f"End time: {FORMATS_HELP}")
 
@@ -443,7 +443,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.cmd == "messages":
         conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
-        msgs = archive.query_messages(
+        msgs, truncated = archive.query_messages(
             channel="teams",
             conversation_id=conv["id"],
             limit=args.limit,
@@ -457,6 +457,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "name": conv["name"],
                 "is_group": conv["is_group"],
             },
+            "truncated": truncated,
             "messages": [_format_message(m) for m in msgs],
             "refresh": refresh_outcome,
             "backup": backup_outcome,
@@ -467,15 +468,19 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         return out
 
     if args.cmd == "search":
+        if any(not kw.strip() for kw in args.keywords):
+            raise ValueError("Search keyword must not be blank")
+        keywords = list(dict.fromkeys(args.keywords))
+
         conv_id = None
         alternatives = []
         if args.conversation:
             conv, alternatives = resolve_conversation_for_query(archive, args.conversation, refresh_status, refresh_error)
             conv_id = conv["id"]
 
-        msgs = archive.search_messages(
+        msgs, truncated = archive.search_messages(
             channel="teams",
-            keyword=args.keyword,
+            keyword=keywords,
             conversation_id=conv_id,
             limit=args.limit,
             start=args.start,
@@ -484,16 +489,22 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         out_messages = []
         for m in msgs:
             fmt = _format_message(m)
+            fmt["conversation_name"] = m["conversation_name"]
+            fmt["is_group"] = m["is_group"]
             fmt["hit_in_quote"] = m["hit_in_quote"]
+            fmt["matched_keywords"] = m["matched_keywords"]
             out_messages.append(fmt)
 
         out = {
-            "keyword": args.keyword,
+            "keywords": keywords,
+            "truncated": truncated,
             "messages": out_messages,
             "refresh": refresh_outcome,
             "backup": backup_outcome,
             "failures": failures,
         }
+        if len(keywords) == 1:
+            out["keyword"] = keywords[0]
         if alternatives:
             out["alternatives"] = alternatives
         return out

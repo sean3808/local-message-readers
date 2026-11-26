@@ -8,7 +8,7 @@ def test_merge_same_source_same_version_prefers_source(tmp_path):
     failures = []
     stats = {}
     archive.merge_conversation_into('teams', 'old', 'new', failures, stats)
-    assert archive.query_messages('teams', 'new')[0]['text'] == 'source'
+    assert archive.query_messages('teams', 'new')[0][0]['text'] == 'source'
     assert failures == []
     assert stats.get('unorderable_conflicts', 0) == 0
 
@@ -20,7 +20,7 @@ def test_merge_different_sources_conflicts(tmp_path):
     failures = []
     stats = {}
     archive.merge_conversation_into('teams', 'old', 'new', failures, stats)
-    assert archive.query_messages('teams', 'new')[0]['text'] == 'target'
+    assert archive.query_messages('teams', 'new')[0][0]['text'] == 'target'
     assert len(failures) == 1
     assert stats['unorderable_conflicts'] == 1
 
@@ -37,7 +37,7 @@ def test_merge_older_source_backfills_only_matching_files(tmp_path):
         failures = []
         stats = {}
         archive.merge_conversation_into('teams', 'old', 'new', failures, stats)
-        for message in (archive.query_messages('teams', 'new')[0], archive.get_cache_message('teams', 'new', '1')):
+        for message in (archive.query_messages('teams', 'new')[0][0], archive.get_cache_message('teams', 'new', '1')):
             assert message['attachments'] == [{'name': 'a', 'url': 'link' if same_files else None}]
             assert message['version'] == 2
         assert failures == []
@@ -50,7 +50,7 @@ def test_merge_newer_source_backfills_cache_from_target(tmp_path):
         archive.ingest_messages('teams', [{'id': '1', 'conversation_id': cid, 'version': version,
                                          'files': ['a'], 'attachments': [{'name': 'a', 'url': url}]}], source='cache')
     archive.merge_conversation_into('teams', 'old', 'new')
-    for message in (archive.query_messages('teams', 'new')[0], archive.get_cache_message('teams', 'new', '1')):
+    for message in (archive.query_messages('teams', 'new')[0][0], archive.get_cache_message('teams', 'new', '1')):
         assert message['attachments'] == [{'name': 'a', 'url': 'link'}]
         assert message['version'] == 2
 
@@ -63,7 +63,7 @@ def test_merge_same_source_same_version_different_files_keeps_source_row(tmp_pat
     failures = []
     stats = {}
     archive.merge_conversation_into('teams', 'old', 'new', failures, stats)
-    message = archive.query_messages('teams', 'new')[0]
+    message = archive.query_messages('teams', 'new')[0][0]
     assert message['files'] == ['b']
     assert message['attachments'] == [{'name': 'b', 'url': 'b-url'}]
     assert failures == []

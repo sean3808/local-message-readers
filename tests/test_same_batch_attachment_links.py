@@ -14,7 +14,7 @@ def test_same_batch_same_version_merges_attachment_links(tmp_path, reverse, sour
     rows = [linked, missing] if reverse else [missing, linked]
     failures, stats = [], {}
     archive.ingest_messages("teams", rows, source=source, failures=failures, stats=stats)
-    message = archive.query_messages("teams", "c")[0]
+    message = archive.query_messages("teams", "c")[0][0]
     assert message["attachments"] == linked["attachments"]
     assert message["version"] == 100
     if source == "cache":
@@ -32,7 +32,7 @@ def test_same_batch_newest_version_wins(tmp_path, reverse):
            "attachments": [{"name": "new", "url": "new-url"}]}
     failures, stats = [], {}
     archive.ingest_messages("teams", [new, old] if reverse else [old, new], failures=failures, stats=stats)
-    for message in (archive.query_messages("teams", "c")[0], archive.get_cache_message("teams", "c", "1")):
+    for message in (archive.query_messages("teams", "c")[0][0], archive.get_cache_message("teams", "c", "1")):
         for field in ("version", "text", "files", "attachments"):
             assert message[field] == new[field]
     assert failures == []
@@ -46,7 +46,7 @@ def test_same_batch_different_files_keep_first_and_record_conflict(tmp_path):
     second = {**first, "files": ["b"], "attachments": [{"name": "b", "url": "b-url"}]}
     failures, stats = [], {}
     archive.ingest_messages("teams", [first, second], failures=failures, stats=stats)
-    for message in (archive.query_messages("teams", "c")[0], archive.get_cache_message("teams", "c", "1")):
+    for message in (archive.query_messages("teams", "c")[0][0], archive.get_cache_message("teams", "c", "1")):
         assert message["files"] == first["files"]
         assert message["attachments"] == first["attachments"]
     assert len(failures) == 1
