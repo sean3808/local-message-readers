@@ -6,14 +6,55 @@ import json
 import os
 import sqlite3
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import zstandard
 from conftest import settings_args
+from wechat_cli.core.messages import _XML_UNSAFE_RE
 
 from readers import wechat, wechat_media
+
+MSG_TABLE = "Msg_11111111111111111111111111111111"
+MSG_TABLE_2 = "Msg_22222222222222222222222222222222"
+
+
+def _iso(ts: int) -> str:
+    return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
+
+
+def _file_xml(md5: str, prefix: str = "") -> str:
+    return f"{prefix}<msg><appmsg><type>6</type><md5>{md5}</md5></appmsg></msg>"
+
+
+def _add_file_link(
+    hl: sqlite3.Connection,
+    md5: str,
+    file_name: str,
+    *,
+    row_type: int = 1,
+    dir1: int = 1,
+    dir2: int = 0,
+) -> None:
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        (md5, row_type, file_name, dir1, dir2),
+    )
+
+
+def _add_msg(
+    conn: sqlite3.Connection,
+    local_id: int,
+    local_type: int,
+    ts: int,
+    content: str | bytes,
+    *,
+    ct: int = 0,
+    table: str = MSG_TABLE,
+) -> None:
+    conn.execute(f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?, ?)", (local_id, local_type, ts, 1, content, ct))
 
 
 def _make_hardlink_db(db_path: Path) -> sqlite3.Connection:
@@ -37,7 +78,7 @@ def _make_hardlink_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _make_msg_db(db_path: Path, table_name: str = "Msg_11111111111111111111111111111111") -> sqlite3.Connection:
+def _make_msg_db(db_path: Path, table_name: str = MSG_TABLE) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE IF NOT EXISTS Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
     conn.execute("INSERT OR IGNORE INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_alice')")
@@ -74,7 +115,7 @@ def _setup_wechat_env(
     if msg_dbs is None:
         default_db = tmp_path / "msg_0.db"
         _make_msg_db(default_db).close()
-        msg_dbs = [(default_db, "Msg_11111111111111111111111111111111")]
+        msg_dbs = [(default_db, MSG_TABLE)]
 
     conv_id = "1001@chatroom" if is_group else "wxid_alice"
     conv_name = "Logistics Group" if is_group else "Alice Example"
@@ -146,41 +187,27 @@ def test_download_file_type_1_and_type_6(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     # Type 1 uses dir1; Type 6 uses dir2
     file1_dir = msg_root / "file" / "2026-11"
     file1_dir.mkdir(parents=True)
-    file1_path = file1_dir / "invoice.pdf"
-    file1_path.write_bytes(b"%PDF-1.4\nhello")
+    (file1_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\nhello")
 
     file6_dir = msg_root / "file" / "2026-10"
     file6_dir.mkdir(parents=True)
-    file6_path = file6_dir / "packing.xlsx"
-    file6_path.write_bytes(b"PK\x03\x04excel")
+    (file6_dir / "packing.xlsx").write_bytes(b"PK\x03\x04excel")
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11'), (2, '2026-10'), (3, 'wrong_dir')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("aaaa" * 8, 1, "invoice.pdf", 1, 3),
-    )
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("bbbb" * 8, 6, "packing.xlsx", 3, 2),
-    )
+    _add_file_link(hl, "aaaa" * 8, "invoice.pdf", row_type=1, dir1=1, dir2=3)
+    _add_file_link(hl, "bbbb" * 8, "packing.xlsx", row_type=6, dir1=3, dir2=2)
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (101, 49, 1794285100, 1, f"<msg><appmsg><type>6</type><md5>{'AAAA' * 8}</md5></appmsg></msg>", 0),
-    )
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (102, 49, 1794285200, 1, f"<msg><appmsg><type>6</type><md5>{'bbbb' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 101, 49, 1794285100, _file_xml("AAAA" * 8))
+    _add_msg(mconn, 102, 49, 1794285200, _file_xml("bbbb" * 8))
     mconn.commit()
     mconn.close()
 
@@ -228,7 +255,7 @@ def test_download_plaintext_image_dat_detected_suffix(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     img_dir = msg_root / "attach" / ("a" * 32) / "2026-11" / "Img"
     img_dir.mkdir(parents=True)
@@ -243,11 +270,8 @@ def test_download_plaintext_image_dat_detected_suffix(
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (201, 3, 1794285100, 1, f'<msg><img md5="{"cccc" * 8}" /></msg>', 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 201, 3, 1794285100, f'<msg><img md5="{"cccc" * 8}" /></msg>')
     mconn.commit()
     mconn.close()
 
@@ -282,7 +306,7 @@ def test_download_encrypted_or_unrecognized_image(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     img_dir = msg_root / "attach" / ("b" * 32) / "2026-11" / "Img"
     img_dir.mkdir(parents=True)
@@ -297,11 +321,8 @@ def test_download_encrypted_or_unrecognized_image(
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (202, 3, 1794285100, 1, f'<msg><img md5="{"dddd" * 8}" /></msg>', 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 202, 3, 1794285100, f'<msg><img md5="{"dddd" * 8}" /></msg>')
     mconn.commit()
     mconn.close()
 
@@ -322,7 +343,7 @@ def test_download_video_and_thumbnail(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     vid_dir = msg_root / "video" / "2026-11"
     vid_dir.mkdir(parents=True)
@@ -343,15 +364,9 @@ def test_download_video_and_thumbnail(
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (301, 43, 1794285100, 1, f'<msg><videomsg md5="{v_md5}" /></msg>', 0),
-    )
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (302, 43, 1794285200, 1, '<msg><videomsg length="10" /></msg>', 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 301, 43, 1794285100, f'<msg><videomsg md5="{v_md5}" /></msg>')
+    _add_msg(mconn, 302, 43, 1794285200, '<msg><videomsg length="10" /></msg>')
     mconn.commit()
     mconn.close()
 
@@ -378,7 +393,7 @@ def test_download_image_md5_before_originsourcemd5_priority(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     img_dir = msg_root / "attach" / ("c" * 32) / "2026-11" / "Img"
     img_dir.mkdir(parents=True)
@@ -398,17 +413,9 @@ def test_download_image_md5_before_originsourcemd5_priority(
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    # Both present -> md5 wins
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (401, 3, 1794285100, 1, f'<msg><img md5="{"1111" * 8}" originsourcemd5="{"2222" * 8}" /></msg>', 0),
-    )
-    # md5 has no hardlink row -> falls back to originsourcemd5
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (402, 3, 1794285200, 1, f'<msg><img md5="{"9999" * 8}" originsourcemd5="{"2222" * 8}" /></msg>', 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 401, 3, 1794285100, f'<msg><img md5="{"1111" * 8}" originsourcemd5="{"2222" * 8}" /></msg>')
+    _add_msg(mconn, 402, 3, 1794285200, f'<msg><img md5="{"9999" * 8}" originsourcemd5="{"2222" * 8}" /></msg>')
     mconn.commit()
     mconn.close()
 
@@ -429,28 +436,17 @@ def test_download_not_found_states(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("5555" * 8, 1, "gone.pdf", 1, 0),
-    )
+    _add_file_link(hl, "5555" * 8, "gone.pdf")
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    # Missing file on disk
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (501, 49, 1794285100, 1, f"<msg><appmsg><type>6</type><md5>{'5555' * 8}</md5></appmsg></msg>", 0),
-    )
-    # Missing hardlink row
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (502, 49, 1794285200, 1, f"<msg><appmsg><type>6</type><md5>{'6666' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 501, 49, 1794285100, _file_xml("5555" * 8))
+    _add_msg(mconn, 502, 49, 1794285200, _file_xml("6666" * 8))
     mconn.commit()
     mconn.close()
 
@@ -466,7 +462,7 @@ def test_download_not_found_states(
     assert o2["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_NO_HARDLINK_ROW}]
 
     # Missing hardlink.db
-    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
     c3, o3 = _run_download(tmp_path, 501, "wxid_alice", dest, capsys)
     assert c3 == 1
     assert o3["items"] == [{
@@ -481,57 +477,34 @@ def test_download_duplicates_identical_vs_distinct_and_missing_candidates(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     d1 = msg_root / "file" / "2026-10"
     d2 = msg_root / "file" / "2026-11"
     d1.mkdir(parents=True)
     d2.mkdir(parents=True)
 
-    # Identical content + one non-existing candidate row
     (d1 / "dup.txt").write_bytes(b"same content")
     (d2 / "dup.txt").write_bytes(b"same content")
-
-    # Different content
     (d1 / "diff.txt").write_bytes(b"version A")
     (d2 / "diff.txt").write_bytes(b"version B")
-
-    # One existing + one non-existing (must NOT be ambiguous)
     (d1 / "single_real.txt").write_bytes(b"only real")
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-10'), (2, '2026-11'), (3, '2026-09')")
     for d_id in (1, 2, 3):
-        hl.execute(
-            "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-            ("aaaa" * 8, 1, "dup.txt", d_id, 0),
-        )
+        _add_file_link(hl, "aaaa" * 8, "dup.txt", dir1=d_id)
     for d_id in (1, 2):
-        hl.execute(
-            "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-            ("bbbb" * 8, 1, "diff.txt", d_id, 0),
-        )
+        _add_file_link(hl, "bbbb" * 8, "diff.txt", dir1=d_id)
     for d_id in (1, 3):
-        hl.execute(
-            "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-            ("cccc" * 8, 1, "single_real.txt", d_id, 0),
-        )
+        _add_file_link(hl, "cccc" * 8, "single_real.txt", dir1=d_id)
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (601, 49, 1794285100, 1, f"<msg><appmsg><type>6</type><md5>{'aaaa' * 8}</md5></appmsg></msg>", 0),
-    )
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (602, 49, 1794285200, 1, f"<msg><appmsg><type>6</type><md5>{'bbbb' * 8}</md5></appmsg></msg>", 0),
-    )
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (603, 49, 1794285300, 1, f"<msg><appmsg><type>6</type><md5>{'cccc' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 601, 49, 1794285100, _file_xml("aaaa" * 8))
+    _add_msg(mconn, 602, 49, 1794285200, _file_xml("bbbb" * 8))
+    _add_msg(mconn, 603, 49, 1794285300, _file_xml("cccc" * 8))
     mconn.commit()
     mconn.close()
 
@@ -562,7 +535,7 @@ def test_download_unsupported_and_group_prefix_xml(
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(
-        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")], is_group=True
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)], is_group=True
     )
 
     fdir = msg_root / "file" / "2026-11"
@@ -571,31 +544,18 @@ def test_download_unsupported_and_group_prefix_xml(
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("7777" * 8, 1, "group_doc.txt", 1, 0),
-    )
+    _add_file_link(hl, "7777" * 8, "group_doc.txt")
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    # Text
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (701, 1, 1794285100, 1, "wxid_alice:\nhello", 0))
-    # Sticker
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (702, 47, 1794285200, 1, "wxid_alice:\n<msg></msg>", 0))
-    # Forwarded/compound card (type 49, appmsg type 19)
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (703, 49, 1794285300, 1, "wxid_alice:\n<msg><appmsg><type>19</type></appmsg></msg>", 0),
-    )
-    # Malformed XML
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (704, 3, 1794285400, 1, "wxid_alice:\n<msg><broken", 0))
-    # Undecompressible zstd bytes (WCDB_CT_message_content = 4)
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (705, 3, 1794285500, 1, b"\x00\xffrawbytes", 4))
-    # Group file message compressed with zstd and sender prefix
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 701, 1, 1794285100, "wxid_alice:\nhello")
+    _add_msg(mconn, 702, 47, 1794285200, "wxid_alice:\n<msg></msg>")
+    _add_msg(mconn, 703, 49, 1794285300, "wxid_alice:\n<msg><appmsg><type>19</type></appmsg></msg>")
+    _add_msg(mconn, 704, 3, 1794285400, "wxid_alice:\n<msg><broken")
+    _add_msg(mconn, 705, 3, 1794285500, b"\x00\xffrawbytes", ct=4)
     cctx = zstandard.ZstdCompressor()
-    xml_bytes = f"wxid_alice:\n<msg><appmsg><type>6</type><md5>{'7777' * 8}</md5></appmsg></msg>".encode()
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (706, 49, 1794285600, 1, cctx.compress(xml_bytes), 4))
+    _add_msg(mconn, 706, 49, 1794285600, cctx.compress(_file_xml("7777" * 8, prefix="wxid_alice:\n").encode()), ct=4)
     mconn.commit()
     mconn.close()
 
@@ -618,43 +578,47 @@ def test_download_unsupported_and_group_prefix_xml(
     assert out_ok["items"][0]["name"] == "group_doc.txt"
 
 
+def test_download_unsafe_xml_doctype_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = tmp_path / "msg_0.db"
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    unsafe_xml = '<!DOCTYPE foo [<!ENTITY xxe "bar">]><msg><img md5="aaaa" /></msg>'
+    assert _XML_UNSAFE_RE.search(unsafe_xml)
+
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 750, 3, 1794285100, unsafe_xml)
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 750, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert out["items"] == [{"kind": None, "status": "unsupported", "reason": wechat_media.REASON_MALFORMED_XML}]
+
+
 def test_download_path_traversal_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
-    outside_file = account_root / "secret.txt"
-    outside_file.write_bytes(b"secret")
-
-    fdir = msg_root / "file" / "2026-11"
-    fdir.mkdir(parents=True)
+    (account_root / "secret.txt").write_bytes(b"secret")
+    (msg_root / "file" / "2026-11").mkdir(parents=True)
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11'), (2, '../..')")
-    # .. in file_name
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("8881" * 8, 1, "../../secret.txt", 1, 0),
-    )
-    # dir2id escapes msg/
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("8882" * 8, 1, "secret.txt", 2, 0),
-    )
+    _add_file_link(hl, "8881" * 8, "../../secret.txt", dir1=1)
+    _add_file_link(hl, "8882" * 8, "secret.txt", dir1=2)
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (801, 49, 1794285100, 1, f"<msg><appmsg><type>6</type><md5>{'8881' * 8}</md5></appmsg></msg>", 0),
-    )
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (802, 49, 1794285200, 1, f"<msg><appmsg><type>6</type><md5>{'8882' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 801, 49, 1794285100, _file_xml("8881" * 8))
+    _add_msg(mconn, 802, 49, 1794285200, _file_xml("8882" * 8))
     mconn.commit()
     mconn.close()
 
@@ -676,33 +640,26 @@ def test_download_symlink_rejected(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     outside_file = account_root / "secret.txt"
     outside_file.write_bytes(b"secret")
 
     fdir = msg_root / "file" / "2026-11"
     fdir.mkdir(parents=True)
-    sym_path = fdir / "link.txt"
     try:
-        os.symlink(outside_file, sym_path)
+        os.symlink(outside_file, fdir / "link.txt")
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"OS refused symlink creation: {exc}")
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("8883" * 8, 1, "link.txt", 1, 0),
-    )
+    _add_file_link(hl, "8883" * 8, "link.txt")
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (803, 49, 1794285300, 1, f"<msg><appmsg><type>6</type><md5>{'8883' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 803, 49, 1794285300, _file_xml("8883" * 8))
     mconn.commit()
     mconn.close()
 
@@ -725,7 +682,7 @@ def test_download_junction_reparse_point_rejected(
 
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     target_dir = account_root / "outside_dir"
     target_dir.mkdir()
@@ -733,23 +690,16 @@ def test_download_junction_reparse_point_rejected(
 
     file_root = msg_root / "file"
     file_root.mkdir(parents=True)
-    junction_dir = file_root / "2026-11"
-    create_junction(str(target_dir), str(junction_dir))
+    create_junction(str(target_dir), str(file_root / "2026-11"))
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("8884" * 8, 1, "payload.txt", 1, 0),
-    )
+    _add_file_link(hl, "8884" * 8, "payload.txt")
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (804, 49, 1794285400, 1, f"<msg><appmsg><type>6</type><md5>{'8884' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 804, 49, 1794285400, _file_xml("8884" * 8))
     mconn.commit()
     mconn.close()
 
@@ -766,22 +716,15 @@ def test_download_dir2id_unresolved(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     hl = _make_hardlink_db(hl_db)
-    # dir1=99 does not exist in dir2id
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("8885" * 8, 1, "orphan.pdf", 99, 0),
-    )
+    _add_file_link(hl, "8885" * 8, "orphan.pdf", dir1=99)
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (805, 49, 1794285500, 1, f"<msg><appmsg><type>6</type><md5>{'8885' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 805, 49, 1794285500, _file_xml("8885" * 8))
     mconn.commit()
     mconn.close()
 
@@ -798,33 +741,25 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
     fdir = msg_root / "file" / "2026-11"
     fdir.mkdir(parents=True)
-    src = fdir / "report.txt"
-    src.write_bytes(b"initial bytes")
+    (fdir / "report.txt").write_bytes(b"initial bytes")
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("9991" * 8, 1, "report.txt", 1, 0),
-    )
+    _add_file_link(hl, "9991" * 8, "report.txt")
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (901, 49, 1794285100, 1, f"<msg><appmsg><type>6</type><md5>{'9991' * 8}</md5></appmsg></msg>", 0),
-    )
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 901, 49, 1794285100, _file_xml("9991" * 8))
     mconn.commit()
     mconn.close()
 
     dest = tmp_path / "out"
     dest.mkdir()
-    # Existing destination file must not be overwritten
     (dest / "report.txt").write_bytes(b"existing keep me")
 
     c1, o1 = _run_download(tmp_path, 901, "wxid_alice", dest, capsys)
@@ -833,7 +768,6 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
     assert (dest / "report.txt").read_bytes() == b"existing keep me"
     assert (dest / "report (1).txt").read_bytes() == b"initial bytes"
 
-    # Simulate source modified mid-copy via _copy_verified seam
     orig_fstat = os.fstat
     calls = {"n": 0}
 
@@ -841,7 +775,6 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
         res = orig_fstat(fd)
         calls["n"] += 1
         if calls["n"] == 2:
-            # Return altered mtime_ns on post-copy fstat
             return os.stat_result((
                 res.st_mode, res.st_ino, res.st_dev, res.st_nlink,
                 res.st_uid, res.st_gid, res.st_size,
@@ -857,59 +790,30 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
         "status": "not_found",
         "reason": wechat_media.REASON_SOURCE_CHANGED,
     }]
-    # Partial output report (2).txt must have been removed
     assert sorted(p.name for p in dest.iterdir()) == ["report (1).txt", "report.txt"]
 
 
-def test_download_duplicate_local_id_across_dbs_and_arg_errors(
+def test_download_arg_and_lookup_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    db1 = tmp_path / "msg_0.db"
-    db2 = tmp_path / "msg_1.db"
-    hl_db = tmp_path / "hardlink.db"
-
-    m1 = _make_msg_db(db1, "Msg_11111111111111111111111111111111")
-    m1.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (50, 1, 1794285100, 1, "first", 0))
+    msg_db = tmp_path / "msg_0.db"
+    m1 = _make_msg_db(msg_db)
+    _add_msg(m1, 50, 1, 1794285100, "hello")
     m1.commit()
     m1.close()
 
-    m2 = _make_msg_db(db2, "Msg_11111111111111111111111111111111")
-    m2.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (50, 1, 1794285200, 1, "second", 0))
-    m2.commit()
-    m2.close()
-
-    _setup_wechat_env(
-        monkeypatch,
-        tmp_path,
-        hardlink_db=hl_db,
-        msg_dbs=[(db1, "Msg_11111111111111111111111111111111"), (db2, "Msg_11111111111111111111111111111111")],
-    )
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=tmp_path / "hardlink.db", msg_dbs=[(msg_db, MSG_TABLE)])
     dest = tmp_path / "out"
     dest.mkdir()
 
-    # Duplicate local_id across two dbs with different content/timestamps -> alternatives + retry with --time
-    code, out = _run_download(tmp_path, 50, "wxid_alice", dest, capsys)
-    assert code == 1
-    assert "error" in out
-    assert "2" in out["error"]
-    assert "--time" in out["error"]
-    assert [a["timestamp"] for a in out["alternatives"]] == [1794285100, 1794285200]
-    assert all(set(a.keys()) == {"time", "timestamp", "type"} for a in out["alternatives"])
-    assert str(db1) not in out["error"]
-    assert str(db2) not in out["error"]
-    assert list(dest.iterdir()) == []
-
-    # Message not found
     code2, out2 = _run_download(tmp_path, 9999, "wxid_alice", dest, capsys)
     assert code2 == 1
     assert "error" in out2
 
-    # Conversation not found
     code3, out3 = _run_download(tmp_path, 50, "unknown_person", dest, capsys)
     assert code3 == 1
     assert "error" in out3
 
-    # Invalid --to (missing dir)
     code4, out4 = _run_download(tmp_path, 50, "wxid_alice", tmp_path / "no_such_dir", capsys)
     assert code4 == 1
     assert "error" in out4
@@ -919,8 +823,8 @@ def test_download_temp_dir_deleted_after_main(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
-    _make_msg_db(msg_db, "Msg_11111111111111111111111111111111").close()
-    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _make_msg_db(msg_db).close()
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
 
     created_dirs: list[str] = []
     real_mkdtemp = tempfile.mkdtemp
@@ -944,12 +848,12 @@ def test_existing_messages_subcommand_json_unchanged(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
-    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
-    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (1, 1, 1794285100, 1, "hello", 0))
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 1, 1, 1794285100, "hello")
     mconn.commit()
     mconn.close()
 
-    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
     code = wechat.main([*settings_args(tmp_path), "messages", "wxid_alice", "--limit", "10"])
     assert code == 0
     out = json.loads(capsys.readouterr().out)
@@ -962,19 +866,14 @@ def test_existing_messages_subcommand_json_unchanged(
     assert out["messages"][0]["text"] == "hello"
 
 
-def test_download_sharded_local_id_disambiguated_by_time_and_deduped(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from datetime import datetime
-
+def _setup_two_shard_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Path, Path, Path]:
     db1 = tmp_path / "msg_0.db"
     db2 = tmp_path / "msg_1.db"
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(
-        monkeypatch,
-        tmp_path,
-        hardlink_db=hl_db,
-        msg_dbs=[(db1, "Msg_11111111111111111111111111111111"), (db2, "Msg_11111111111111111111111111111111")],
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(db1, MSG_TABLE), (db2, MSG_TABLE)]
     )
 
     fdir = msg_root / "file" / "2026-11"
@@ -985,119 +884,112 @@ def test_download_sharded_local_id_disambiguated_by_time_and_deduped(
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("aa01" * 8, 1, "jan_quote.pdf", 1, 0),
-    )
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("aa02" * 8, 1, "feb_quote.pdf", 1, 0),
-    )
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("aa03" * 8, 1, "same_doc.pdf", 1, 0),
-    )
+    _add_file_link(hl, "aa01" * 8, "jan_quote.pdf")
+    _add_file_link(hl, "aa02" * 8, "feb_quote.pdf")
+    _add_file_link(hl, "aa03" * 8, "same_doc.pdf")
     hl.commit()
     hl.close()
 
-    ts1 = 1794285100
-    ts2 = 1794285200
-    ts_same = 1794285300
-    ts_tie = 1794285400
+    dest = tmp_path / "out"
+    dest.mkdir()
+    return db1, db2, dest
 
-    m1 = _make_msg_db(db1, "Msg_11111111111111111111111111111111")
-    m1.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (10, 49, ts1, 1, f"<msg><appmsg><type>6</type><md5>{'aa01' * 8}</md5></appmsg></msg>", 0),
-    )
-    m1.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (20, 49, ts_same, 1, f"<msg><appmsg><type>6</type><md5>{'aa03' * 8}</md5></appmsg></msg>", 0),
-    )
-    m1.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (30, 49, ts_tie, 1, f"<msg><appmsg><type>6</type><md5>{'aa01' * 8}</md5></appmsg></msg>", 0),
-    )
+
+def test_download_sharded_local_id_ambiguous_returns_alternatives(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db1, db2, dest = _setup_two_shard_files(monkeypatch, tmp_path)
+    ts1, ts2 = 1794285100, 1794285200
+
+    m1 = _make_msg_db(db1)
+    _add_msg(m1, 10, 49, ts1, _file_xml("aa01" * 8))
     m1.commit()
     m1.close()
 
-    m2 = _make_msg_db(db2, "Msg_11111111111111111111111111111111")
-    m2.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (10, 49, ts2, 1, f"<msg><appmsg><type>6</type><md5>{'aa02' * 8}</md5></appmsg></msg>", 0),
-    )
-    # Byte-identical duplicate of local_id=20 in db2
-    m2.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (20, 49, ts_same, 1, f"<msg><appmsg><type>6</type><md5>{'aa03' * 8}</md5></appmsg></msg>", 0),
-    )
-    # Distinct message at identical timestamp ts_tie
-    m2.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (30, 49, ts_tie, 1, f"<msg><appmsg><type>6</type><md5>{'aa02' * 8}</md5></appmsg></msg>", 0),
-    )
+    m2 = _make_msg_db(db2)
+    _add_msg(m2, 10, 49, ts2, _file_xml("aa02" * 8))
     m2.commit()
     m2.close()
 
-    dest = tmp_path / "out"
-    dest.mkdir()
-
-    # 1) Ambiguous without --time -> alternatives, exit 1, nothing written
-    c_amb, o_amb = _run_download(tmp_path, 10, "wxid_alice", dest, capsys)
-    assert c_amb == 1
-    assert "--time" in o_amb["error"]
-    assert [a["timestamp"] for a in o_amb["alternatives"]] == [ts1, ts2]
+    code, out = _run_download(tmp_path, 10, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert "--time" in out["error"]
+    assert str(db1) not in out["error"]
+    assert str(db2) not in out["error"]
+    assert [a["timestamp"] for a in out["alternatives"]] == [ts1, ts2]
+    assert all(set(a.keys()) == {"time", "timestamp", "type"} for a in out["alternatives"])
     assert list(dest.iterdir()) == []
 
-    # 2) Disambiguate first with ISO-with-offset string
-    iso_1 = datetime.fromtimestamp(ts1).astimezone().isoformat(timespec="seconds")
-    c_iso, o_iso = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=iso_1)
-    assert c_iso == 0
-    assert o_iso["items"][0]["name"] == "jan_quote.pdf"
+
+def test_download_sharded_local_id_disambiguated_by_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db1, db2, dest = _setup_two_shard_files(monkeypatch, tmp_path)
+    ts1, ts2 = 1794285100, 1794285200
+
+    m1 = _make_msg_db(db1)
+    _add_msg(m1, 10, 49, ts1, _file_xml("aa01" * 8))
+    m1.commit()
+    m1.close()
+
+    m2 = _make_msg_db(db2)
+    _add_msg(m2, 10, 49, ts2, _file_xml("aa02" * 8))
+    m2.commit()
+    m2.close()
+
+    c1, o1 = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=_iso(ts1))
+    assert c1 == 0
+    assert o1["items"][0]["name"] == "jan_quote.pdf"
     assert (dest / "jan_quote.pdf").read_bytes() == b"%PDF-jan"
     assert not (dest / "feb_quote.pdf").exists()
 
-    # 3) Disambiguate second with naive local time string
     naive_2 = datetime.fromtimestamp(ts2).strftime("%Y-%m-%d %H:%M:%S")
-    c_naive, o_naive = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=naive_2)
-    assert c_naive == 0
-    assert o_naive["items"][0]["name"] == "feb_quote.pdf"
+    c2, o2 = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time=naive_2)
+    assert c2 == 0
+    assert o2["items"][0]["name"] == "feb_quote.pdf"
     assert (dest / "feb_quote.pdf").read_bytes() == b"%PDF-feb"
 
-    # 4) Byte-identical duplicates in two dbs -> resolved without --time
-    c_dup, o_dup = _run_download(tmp_path, 20, "wxid_alice", dest, capsys)
-    assert c_dup == 0
-    assert o_dup["items"][0]["name"] == "same_doc.pdf"
-
-    # 5) --time matching none -> Message not found
     c_none, o_none = _run_download(tmp_path, 10, "wxid_alice", dest, capsys, msg_time="2020-01-01 00:00:00")
     assert c_none == 1
     assert "Message not found" in o_none["error"]
 
-    # 6) --time given but multiple distinct candidates share that exact second
-    iso_tie = datetime.fromtimestamp(ts_tie).astimezone().isoformat(timespec="seconds")
-    c_tie, o_tie = _run_download(tmp_path, 30, "wxid_alice", dest, capsys, msg_time=iso_tie)
+
+def test_download_sharded_identical_duplicate_deduped_and_same_time_tie(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db1, db2, dest = _setup_two_shard_files(monkeypatch, tmp_path)
+    ts_same, ts_tie = 1794285300, 1794285400
+
+    m1 = _make_msg_db(db1)
+    _add_msg(m1, 20, 49, ts_same, _file_xml("aa03" * 8))
+    _add_msg(m1, 30, 49, ts_tie, _file_xml("aa01" * 8))
+    m1.commit()
+    m1.close()
+
+    m2 = _make_msg_db(db2)
+    _add_msg(m2, 20, 49, ts_same, _file_xml("aa03" * 8))
+    _add_msg(m2, 30, 49, ts_tie, _file_xml("aa02" * 8))
+    m2.commit()
+    m2.close()
+
+    c_dup, o_dup = _run_download(tmp_path, 20, "wxid_alice", dest, capsys)
+    assert c_dup == 0
+    assert o_dup["items"][0]["name"] == "same_doc.pdf"
+
+    c_tie, o_tie = _run_download(tmp_path, 30, "wxid_alice", dest, capsys, msg_time=_iso(ts_tie))
     assert c_tie == 1
     assert "same time" in o_tie["error"]
     assert [a["timestamp"] for a in o_tie["alternatives"]] == [ts_tie, ts_tie]
 
 
-def test_download_unreadable_shard_fails_closed_without_time_and_resolves_with_time(
+def test_download_unreadable_shard_fails_closed_without_time(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from datetime import datetime
-
     good_db = tmp_path / "msg_0.db"
     broken_db = tmp_path / "msg_1_missing.db"
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(
-        monkeypatch,
-        tmp_path,
-        hardlink_db=hl_db,
-        msg_dbs=[
-            (good_db, "Msg_11111111111111111111111111111111"),
-            (broken_db, "Msg_22222222222222222222222222222222"),
-        ],
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(good_db, MSG_TABLE), (broken_db, MSG_TABLE_2)]
     )
 
     fdir = msg_root / "file" / "2026-11"
@@ -1106,38 +998,54 @@ def test_download_unreadable_shard_fails_closed_without_time_and_resolves_with_t
 
     hl = _make_hardlink_db(hl_db)
     hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    hl.execute(
-        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
-        ("bb01" * 8, 1, "safe.pdf", 1, 0),
+    _add_file_link(hl, "bb01" * 8, "safe.pdf")
+    hl.commit()
+    hl.close()
+
+    m1 = _make_msg_db(good_db)
+    _add_msg(m1, 42, 49, 1794285100, _file_xml("bb01" * 8))
+    m1.commit()
+    m1.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 42, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert "--time" in out["error"]
+    assert len(out["failures"]) == 1
+    assert list(dest.iterdir()) == []
+
+
+def test_download_unreadable_shard_resolves_with_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    good_db = tmp_path / "msg_0.db"
+    broken_db = tmp_path / "msg_1_missing.db"
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(good_db, MSG_TABLE), (broken_db, MSG_TABLE_2)]
     )
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "safe.pdf").write_bytes(b"%PDF-safe")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "bb01" * 8, "safe.pdf")
     hl.commit()
     hl.close()
 
     ts = 1794285100
-    m1 = _make_msg_db(good_db, "Msg_11111111111111111111111111111111")
-    m1.execute(
-        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
-        (42, 49, ts, 1, f"<msg><appmsg><type>6</type><md5>{'bb01' * 8}</md5></appmsg></msg>", 0),
-    )
+    m1 = _make_msg_db(good_db)
+    _add_msg(m1, 42, 49, ts, _file_xml("bb01" * 8))
     m1.commit()
     m1.close()
-    # broken_db intentionally has no Msg_22222222222222222222222222222222 table -> sqlite3.OperationalError
 
     dest = tmp_path / "out"
     dest.mkdir()
-
-    # Without --time: must fail closed and write nothing
-    c_no_time, o_no_time = _run_download(tmp_path, 42, "wxid_alice", dest, capsys)
-    assert c_no_time == 1
-    assert "error" in o_no_time
-    assert "--time" in o_no_time["error"]
-    assert len(o_no_time["failures"]) == 1
-    assert list(dest.iterdir()) == []
-
-    # With --time: resolves the matching row and reports the shard failure in failures
-    iso = datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
-    c_with_time, o_with_time = _run_download(tmp_path, 42, "wxid_alice", dest, capsys, msg_time=iso)
-    assert c_with_time == 0
-    assert o_with_time["items"][0]["name"] == "safe.pdf"
-    assert len(o_with_time["failures"]) == 1
+    code, out = _run_download(tmp_path, 42, "wxid_alice", dest, capsys, msg_time=_iso(ts))
+    assert code == 0
+    assert out["items"][0]["name"] == "safe.pdf"
+    assert len(out["failures"]) == 1
     assert (dest / "safe.pdf").read_bytes() == b"%PDF-safe"

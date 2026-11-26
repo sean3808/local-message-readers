@@ -6,11 +6,10 @@ import hashlib
 import os
 import sqlite3
 import stat
-import xml.etree.ElementTree as ET
 from contextlib import closing
 from pathlib import Path
 
-from wechat_cli.core.messages import _parse_message_content, _split_msg_type
+from wechat_cli.core.messages import _parse_message_content, _parse_xml_root, _split_msg_type
 
 REASON_RESOLVED = "resolved"
 REASON_HARDLINK_DB_UNAVAILABLE = "hardlink_db_unavailable"
@@ -27,7 +26,7 @@ REASON_UNSUPPORTED_MESSAGE_TYPE = "unsupported_message_type"
 REASON_MALFORMED_XML = "malformed_message_xml"
 
 _REPARSE_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-_CHUNK_SIZE = 65536
+_CHUNK_SIZE = 1024 * 1024
 
 
 def _item(kind: str | None, status: str, reason: str, **extra: object) -> dict[str, object]:
@@ -84,8 +83,6 @@ def _validate_candidate_path(msg_root: str, parts: list[str]) -> tuple[str | Non
         cur = os.path.join(cur, part)
         try:
             st = os.lstat(cur)
-        except FileNotFoundError:
-            return None, REASON_FILE_MISSING
         except OSError:
             return None, REASON_FILE_MISSING
         if _is_reparse_or_symlink(st):
@@ -249,35 +246,38 @@ def _load_dir2id(conn: sqlite3.Connection) -> dict[int, str]:
 
 
 def _query_hardlink_rows(conn: sqlite3.Connection, table: str, md5_list: list[str]) -> list[tuple[int, str, int, int]]:
-    placeholders = ",".join("?" for _ in md5_list)
-    sql = f"SELECT type, file_name, dir1, dir2 FROM {table} WHERE lower(md5) IN ({placeholders})"
+    candidates = list(dict.fromkeys(form for k in md5_list for form in (k.lower(), k.upper())))
+    placeholders = ",".join("?" for _ in candidates)
+    sql = f"SELECT type, file_name, dir1, dir2 FROM {table} WHERE md5 IN ({placeholders})"
     seen: set[tuple[int, str, int, int]] = set()
     rows: list[tuple[int, str, int, int]] = []
-    for row in conn.execute(sql, md5_list):
+    for row in conn.execute(sql, candidates):
         if row not in seen:
             seen.add(row)
             rows.append(row)
     return rows
 
 
-def _parse_xml_root(content: str | bytes | None, local_type: int, is_group: bool) -> tuple[ET.Element | None, str | None]:
+def _parse_message_xml(content: str | bytes | None, local_type: int, is_group: bool):
     if content is None or isinstance(content, bytes):
         return None, REASON_UNSUPPORTED_MESSAGE_TYPE
     _, body = _parse_message_content(content, local_type, is_group)
-    body = body.strip()
-    if not body:
+    root = _parse_xml_root(body.strip())
+    if root is None:
         return None, REASON_MALFORMED_XML
-    try:
-        return ET.fromstring(body), None
-    except ET.ParseError:
-        return None, REASON_MALFORMED_XML
+    return root, None
 
 
-def _find_tag(root: ET.Element, tag: str) -> ET.Element | None:
+def _find_tag(root, tag: str):
     if root.tag == tag:
         return root
     found = root.find(tag)
     return found if found is not None else root.find(f".//{tag}")
+
+
+def _missing_key_item(kind: str, hardlink_db_path: str | None) -> list[dict[str, object]]:
+    reason = REASON_NO_MD5_IN_MESSAGE if hardlink_db_path and os.path.isfile(hardlink_db_path) else REASON_HARDLINK_DB_UNAVAILABLE
+    return [_item(kind, "not_found", reason)]
 
 
 def _lookup_hardlink(
@@ -317,7 +317,7 @@ def resolve_and_download_media(
     if base_type not in (3, 43, 49):
         return [_item(None, "unsupported", REASON_UNSUPPORTED_MESSAGE_TYPE)]
 
-    root, xml_err = _parse_xml_root(content, local_type, is_group)
+    root, xml_err = _parse_message_xml(content, local_type, is_group)
     if root is None:
         return [_item(None, "unsupported", xml_err or REASON_MALFORMED_XML)]
 
@@ -327,9 +327,7 @@ def resolve_and_download_media(
             return [_item(None, "unsupported", REASON_UNSUPPORTED_MESSAGE_TYPE)]
         file_md5 = (appmsg.findtext("md5") or "").strip().lower()
         if not file_md5:
-            if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
-                return [_item("file", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
-            return [_item("file", "not_found", REASON_NO_MD5_IN_MESSAGE)]
+            return _missing_key_item("file", hardlink_db_path)
         res = _lookup_hardlink(hardlink_db_path, "file_hardlink_info_v4", [[file_md5]])
         if isinstance(res, str):
             return [_item("file", "not_found", res)]
@@ -351,9 +349,7 @@ def resolve_and_download_media(
             ) if k
         ))
         if not keys:
-            if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
-                return [_item("video", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
-            return [_item("video", "not_found", REASON_NO_MD5_IN_MESSAGE)]
+            return _missing_key_item("video", hardlink_db_path)
         res = _lookup_hardlink(hardlink_db_path, "video_hardlink_info_v4", [keys])
         if isinstance(res, str):
             return [_item("video", "not_found", res)]
@@ -385,9 +381,7 @@ def resolve_and_download_media(
     img_md5 = (img.attrib.get("md5") or "").strip().lower()
     origin_md5 = (img.attrib.get("originsourcemd5") or "").strip().lower()
     if not img_md5 and not origin_md5:
-        if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
-            return [_item("image", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
-        return [_item("image", "not_found", REASON_NO_MD5_IN_MESSAGE)]
+        return _missing_key_item("image", hardlink_db_path)
     key_groups = [g for g in ([img_md5] if img_md5 else [], [origin_md5] if origin_md5 else []) if g]
     res = _lookup_hardlink(hardlink_db_path, "image_hardlink_info_v4", key_groups)
     if isinstance(res, str):

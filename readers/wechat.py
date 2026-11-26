@@ -5,7 +5,6 @@ Read-only: exposes no send path (ADR-0002). Decrypted artifacts are written to a
 """
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -299,20 +298,7 @@ def recent(app, since, limit, exclude_conversations=None):
     }
 
 
-def _content_digest(raw_content):
-    if raw_content is None:
-        return ""
-    data = raw_content if isinstance(raw_content, bytes) else str(raw_content).encode("utf-8")
-    prefix = b"B" if isinstance(raw_content, bytes) else b"S"
-    return hashlib.sha256(prefix + data).hexdigest()
-
-
-def download_media(app, message_id, conversation, dest_dir, time_str=""):
-    if not os.path.isdir(dest_dir):
-        raise ValueError(f"Destination is not an existing directory: {dest_dir}")
-    parsed_time = parse_time_bound(time_str) if time_str else None
-    target_ts = int(parsed_time) if parsed_time is not None else None
-    ctx = _resolve(app, conversation)
+def _find_message(ctx, message_id, target_ts):
     matches = []
     failures = []
     for tc in _iter_table_contexts(ctx):
@@ -333,10 +319,10 @@ def download_media(app, message_id, conversation, dest_dir, time_str=""):
             failures.append(f"{tc['username']}: {e}")
 
     if failures and target_ts is None:
-        return {
+        return None, failures, {
             "error": f"message id {message_id} could not be checked in every message database; retry with --time or fix the failures",
             "failures": failures,
-        }, 1
+        }
 
     if target_ts is not None:
         matches = [(row, tc) for row, tc in matches if int(row[2]) == target_ts]
@@ -344,7 +330,7 @@ def download_media(app, message_id, conversation, dest_dir, time_str=""):
     seen_messages = set()
     deduped = []
     for row, tc in matches:
-        key = (int(row[2]), row[1], _content_digest(row[4]))
+        key = (int(row[2]), row[1], row[4])
         if key not in seen_messages:
             seen_messages.add(key)
             deduped.append((row, tc))
@@ -365,9 +351,23 @@ def download_media(app, message_id, conversation, dest_dir, time_str=""):
             err = f"message id {message_id} is ambiguous: {len(deduped)} distinct messages share it at the same time; cannot disambiguate with --time"
         else:
             err = f"message id {message_id} is ambiguous: {len(deduped)} messages share it; retry with --time"
-        return {"error": err, "alternatives": alternatives}, 1
+        return None, failures, {"error": err, "alternatives": alternatives}
 
-    row, tc = deduped[0]
+    return deduped[0], failures, None
+
+
+def download_media(app, message_id, conversation, dest_dir, time_str=""):
+    if not os.path.isdir(dest_dir):
+        raise ValueError(f"Destination is not an existing directory: {dest_dir}")
+    parsed_time = parse_time_bound(time_str) if time_str else None
+    target_ts = int(parsed_time) if parsed_time is not None else None
+    ctx = _resolve(app, conversation)
+
+    match, failures, err_result = _find_message(ctx, message_id, target_ts)
+    if err_result is not None:
+        return err_result
+
+    row, tc = match
     _, local_type, _, _, raw_content, ct = row
     content = decompress_content(raw_content, ct)
 
@@ -385,15 +385,13 @@ def download_media(app, message_id, conversation, dest_dir, time_str=""):
         dest_dir,
         is_group=tc["is_group"],
     )
-    result = {
+    return {
         "conversation": _conversation(ctx),
         "message_id": message_id,
         "message_type": format_msg_type(local_type),
         "items": items,
         "failures": failures,
     }
-    code = 0 if any(item["status"] == "resolved" for item in items) else 1
-    return result, code
 
 
 def _parser():
@@ -431,22 +429,22 @@ def _parser():
 
 
 def _run(args):
-    if hasattr(args, "limit"):
+    if args.cmd != "download":
         validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
     if args.cmd == "search":
         if any(not kw.strip() for kw in args.keywords):
             raise ValueError("Search keyword must not be blank")
     app = AppContext()
     if args.cmd == "conversations":
-        return list_conversations(app, args.limit), 0
+        return list_conversations(app, args.limit)
     if args.cmd == "messages":
-        return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end), 0
+        return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end)
     if args.cmd == "recent":
         excluded = get_setting("wechat_exclude_conversations") or []
-        return recent(app, args.since, args.limit, exclude_conversations=excluded), 0
+        return recent(app, args.since, args.limit, exclude_conversations=excluded)
     if args.cmd == "download":
         return download_media(app, args.message_id, args.conversation, args.to_dir, time_str=args.msg_time)
-    return search(app, args.keywords, args.conversation, args.limit, args.start, args.end), 0
+    return search(app, args.keywords, args.conversation, args.limit, args.start, args.end)
 
 
 def main(argv=None):
@@ -458,7 +456,13 @@ def main(argv=None):
     DBCache.MTIME_FILE = os.path.join(cache_dir, "_mtimes.json")
     try:
         configure_settings(args.settings)
-        result, code = _run(args)
+        result = _run(args)
+        if "error" in result:
+            code = 1
+        elif "items" in result:
+            code = 0 if any(item["status"] == "resolved" for item in result["items"]) else 1
+        else:
+            code = 0
     except Exception as e:  # noqa: BLE001 — any failure is reported to the Local Agent as JSON
         result, code = {"error": str(e)}, 1
     finally:
