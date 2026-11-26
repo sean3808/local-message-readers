@@ -241,7 +241,9 @@ def test_read_snapshot_retries_on_mid_read_change(tmp_path: Path) -> None:
         data = path.read_bytes()
         if path == wal_path and reads < 2:
             reads += 1
-            wal_path.write_bytes(_build_wal([(1, 1, _page(20 + reads), None)]))
+            # Grow the file each time: a same-size rewrite inside one NTFS timestamp tick
+            # leaves (size, mtime_ns, ino) unchanged and the retry would not be observable.
+            wal_path.write_bytes(_build_wal([(1, 1, _page(20 + reads), None)], trailing_bytes=b"\x00" * reads))
         return data
 
     result = read_snapshot(db_path, attempts=3, reader=mutating_reader)
