@@ -2,6 +2,10 @@
 
 Each release's notes on GitHub are this file's section for that version. `scripts/release.ps1` refuses to release a version that has no section here, so write the section before releasing.
 
+## [Unreleased]
+
+- **Teams: `ingest_cache` excludes conversations whose replychain key failed to parse**, matching `read_cache_messages` so stale versions are not imported when a newer record fails; aborts message import on unidentifiable key failures (#19).
+
 ## [0.2.0] - 2026-11-19
 
 ### Breaking changes
