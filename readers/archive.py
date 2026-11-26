@@ -1528,6 +1528,8 @@ class Archive:
         # Fetch one extra row to determine truncation
         fetch_limit = limit + 1 if limit > 0 else 101
 
+        exclude_clause = ""
+        query_params: tuple[Any, ...] = (channel, since_ts)
         with closing(self._connect()) as conn:
             if excluded_ids:
                 placeholders = ", ".join("?" for _ in excluded_ids)
@@ -1539,30 +1541,22 @@ class Archive:
                     """,
                     (channel, since_ts, *excluded_ids),
                 ).fetchone()[0]
-                rows = conn.execute(
-                    f"""
-                    SELECT id, conversation_id, time, timestamp, sender_id, sender,
-                           is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
-                    FROM messages
-                    WHERE channel = ? AND timestamp >= ? AND conversation_id NOT IN ({placeholders})
-                    ORDER BY timestamp DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (channel, since_ts, *excluded_ids, fetch_limit),
-                ).fetchall()
+                exclude_clause = f" AND conversation_id NOT IN ({placeholders})"
+                query_params = (channel, since_ts, *excluded_ids)
             else:
                 excluded_count = 0
-                rows = conn.execute(
-                    """
-                    SELECT id, conversation_id, time, timestamp, sender_id, sender,
-                           is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
-                    FROM messages
-                    WHERE channel = ? AND timestamp >= ?
-                    ORDER BY timestamp DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (channel, since_ts, fetch_limit),
-                ).fetchall()
+
+            rows = conn.execute(
+                f"""
+                SELECT id, conversation_id, time, timestamp, sender_id, sender,
+                       is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
+                FROM messages
+                WHERE channel = ? AND timestamp >= ?{exclude_clause}
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+                """,
+                (*query_params, fetch_limit),
+            ).fetchall()
 
         truncated = len(rows) > limit
         if truncated:
