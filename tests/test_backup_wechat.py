@@ -155,6 +155,8 @@ def test_collect_wechat_snapshots_db_and_omits_wal_shm(inputs, tmp_path):
         for idx in range(2, 40):
             conn.execute("INSERT INTO chat (id, body) VALUES (?, ?)", (idx, f"uncommitted-{idx}-" + ("x" * 200)))
 
+        assert (account / "db_storage" / "msg.db-wal").is_file()
+        assert (account / "db_storage" / "msg.db-shm").is_file()
         report, code = run(inputs, tmp_path)
     finally:
         conn.close()

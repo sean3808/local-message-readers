@@ -109,13 +109,13 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
 
 
 _READ_CHUNK_SIZE = 1024 * 1024
+_WIN32_GENERIC_READ = 0x80000000
+_WIN32_FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+_WIN32_OPEN_EXISTING = 3
+_WIN32_FILE_ATTRIBUTE_NORMAL = 0x00000080
 
 
-def read_file_shared(path: Path) -> bytes:
-    """Read a file allowing concurrent writers (Win32 FILE_SHARE_* on Windows)."""
-    if sys.platform != "win32":
-        return path.read_bytes()
-
+def _win32_kernel32():
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -139,20 +139,25 @@ def read_file_shared(path: Path) -> bytes:
     kernel32.ReadFile.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
 
+
+def read_file_shared(path: Path) -> bytes:
+    """Read a file allowing concurrent writers (Win32 FILE_SHARE_* on Windows)."""
+    if sys.platform != "win32":
+        return path.read_bytes()
+
+    from ctypes import wintypes
+
+    kernel32 = _win32_kernel32()
     invalid_handle = wintypes.HANDLE(-1).value
-    generic_read = 0x80000000
-    share_all = 0x00000001 | 0x00000002 | 0x00000004
-    open_existing = 3
-    file_attribute_normal = 0x00000080
-
     handle = kernel32.CreateFileW(
         str(path),
-        generic_read,
-        share_all,
+        _WIN32_GENERIC_READ,
+        _WIN32_FILE_SHARE_ALL,
         None,
-        open_existing,
-        file_attribute_normal,
+        _WIN32_OPEN_EXISTING,
+        _WIN32_FILE_ATTRIBUTE_NORMAL,
         None,
     )
     if handle == invalid_handle:

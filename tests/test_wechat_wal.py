@@ -298,34 +298,28 @@ def test_read_snapshot_rejects_corrupt_wal_without_fallback(tmp_path: Path) -> N
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 shared-read test")
 def test_read_file_shared_while_open_for_write(tmp_path: Path) -> None:
-    import ctypes
     from ctypes import wintypes
+
+    from readers.wechat_wal import (
+        _WIN32_FILE_ATTRIBUTE_NORMAL,
+        _WIN32_FILE_SHARE_ALL,
+        _WIN32_OPEN_EXISTING,
+        _win32_kernel32,
+    )
 
     target = tmp_path / "locked.db"
     payload = _page(7)
     target.write_bytes(payload)
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateFileW.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.c_void_p,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.HANDLE,
-    ]
-    kernel32.CreateFileW.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-
+    kernel32 = _win32_kernel32()
+    generic_write = 0x40000000
     handle = kernel32.CreateFileW(
         str(target),
-        0x40000000,  # GENERIC_WRITE
-        0x00000001 | 0x00000002 | 0x00000004,  # SHARE_READ | SHARE_WRITE | SHARE_DELETE
+        generic_write,
+        _WIN32_FILE_SHARE_ALL,
         None,
-        3,  # OPEN_EXISTING
-        0x00000080,  # FILE_ATTRIBUTE_NORMAL
+        _WIN32_OPEN_EXISTING,
+        _WIN32_FILE_ATTRIBUTE_NORMAL,
         None,
     )
     assert handle != wintypes.HANDLE(-1).value
