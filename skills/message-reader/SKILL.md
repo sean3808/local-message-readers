@@ -71,3 +71,8 @@ Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"` (ma
 ## Maintenance and upgrades
 
 Importing the official export, reconciliation, and checks after a WeChat upgrade: read `references/maintenance.md`. Ordinary queries do not need it.
+
+## Feedback
+
+If a query flow feels awkward, slow, ambiguous, or missing a capability, open an issue (or offer to open one) at `https://github.com/sean3808/local-message-readers/issues` describing the friction and suggested improvement.
+Follow ADR-0009: use only fictional or anonymized examples — never include real conversations, names, account IDs, or machine paths.
