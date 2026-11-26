@@ -65,6 +65,11 @@ def _is_empty_placeholder(key: Any, value: Any) -> bool:
 UNKNOWN_KEY = object()
 """Marker added to `failed_keys` when a record failed before its key could be read."""
 
+_UNKNOWN_KEY_ERROR = (
+    "The cache has corrupt records of unidentifiable origin, "
+    "so it cannot be determined which messages are trustworthy"
+)
+
 
 def _plain_key(key_raw: Any) -> Any:
     if isinstance(key_raw, tuple):
@@ -247,7 +252,7 @@ def read_cache_messages(profile_dir: Path, failures: list[str]) -> list[dict[str
         records = load_latest_replychain_records(leveldb, blob, failures, failed_keys)
         messages = _normalize_replychains(records, failures, report_degraded=False)
     if UNKNOWN_KEY in failed_keys:
-        raise SnapshotError("The cache has corrupt records of unidentifiable origin, so it cannot be determined which messages are trustworthy: " + "; ".join(failures))
+        raise SnapshotError(f"{_UNKNOWN_KEY_ERROR}: " + "; ".join(failures))
     tainted = _tainted_conversation_ids(failed_keys)
     return [m for m in messages if m.get("conversation_id") not in tainted]
 
@@ -325,10 +330,7 @@ def ingest_cache(
             return IngestOutcome(success=False, failures=failures, error=err)
 
         if UNKNOWN_KEY in failed_keys:
-            err = (
-                "The cache has corrupt records of unidentifiable origin, "
-                "so it cannot be determined which messages are trustworthy"
-            )
+            err = _UNKNOWN_KEY_ERROR
             failures.append(err)
             return IngestOutcome(success=False, failures=failures, error=err)
 
