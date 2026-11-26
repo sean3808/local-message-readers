@@ -1,6 +1,6 @@
 [project]
 name = "local-message-readers"
-version = "0.2.0"
+version = "0.3.0"
 description = "Read-only local readers that expose chat conversations to a Local Agent as JSON"
 requires-python = ">=3.13"
 dependencies = [
