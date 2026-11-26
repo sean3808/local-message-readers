@@ -20,6 +20,12 @@ teams_self_id = "8:example"
 # Minimum seconds between automatic Teams cache refreshes (non-negative integer, default 120; 0 = always refresh). Optional.
 refresh_min_interval_seconds = 120
 
+# Conversation IDs to exclude from `wechat-reader recent` (exact IDs as `conversations` prints them). Optional.
+wechat_exclude_conversations = ["12345678@chatroom"]
+
+# Conversation IDs to exclude from `teams-reader recent` (exact IDs as `conversations` prints them). Optional.
+teams_exclude_conversations = ["19:example@thread.v2"]
+
 # Private commit blocklist (UTF-8, one literal per line). The pre-commit check fails closed without it.
 commit_blocklist = "D:/example/private/commit-blocklist.txt"
 

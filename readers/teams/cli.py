@@ -510,14 +510,17 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         return out
 
     if args.cmd == "recent":
-        msgs, truncated = archive.query_recent_messages(
+        excluded = get_setting("teams_exclude_conversations") or []
+        msgs, truncated, excluded_messages = archive.query_recent_messages(
             channel="teams",
             since=args.since,
             limit=args.limit,
+            exclude_conversations=excluded,
         )
         return {
             "since": args.since,
             "truncated": truncated,
+            "excluded_messages": excluded_messages,
             "messages": [_format_message(m) for m in msgs],
             "refresh": refresh_outcome,
             "backup": backup_outcome,

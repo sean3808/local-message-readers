@@ -4,6 +4,8 @@ Each release's notes on GitHub are this file's section for that version. `script
 
 ## [Unreleased]
 
+- **Exclude chosen conversations from `recent` output** across both `wechat-reader` and `teams-reader`: new optional settings keys `wechat_exclude_conversations` and `teams_exclude_conversations` (`list[str]` of exact conversation IDs) exclude matching conversations from `recent` before `--limit` is applied so they do not consume page slots or trigger `truncated`. `recent` now always emits `excluded_messages` counting messages in the `--since`..now range belonging to excluded conversations (`0` when unset or empty); `conversations`, `messages`, `search`, and `download` still include them (#10).
+
 - **Multi-keyword OR search, enriched search hits, and `truncated` reporting** across both `teams-reader` and `wechat-reader`: `search` now accepts one or more keywords (`nargs="+"`, deduplicated, rejecting blank keywords), emits `keywords` (keeping `keyword` when one keyword is given), and attaches `conversation_name`, `is_group`, and `matched_keywords` to each hit. Both `search` and `messages` now report `truncated` (`true` when older matching rows were cut by `--limit`, keeping the newest `N` results returned oldest to newest), and `skills/message-reader/SKILL.md` documents the single-refresh `--no-refresh` investigation pattern and non-`recent` watermark rule (#13).
 - **Teams: `ingest_cache` excludes conversations whose replychain key failed to parse**, matching `read_cache_messages` so stale versions are not imported when a newer record fails; aborts message import on unidentifiable key failures (#19).
 

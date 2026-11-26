@@ -1092,8 +1092,9 @@ def test_search_and_recent_across_multiple_ingests(temp_archive: Archive) -> Non
     assert [m["id"] for m in results] == ["m_old_1", "m_old_2", "m_new_1", "m_new_2"]
 
     # recent across both ingests (with 10:30, between ts1 and ts2, as the boundary)
-    recent_msgs, truncated = temp_archive.query_recent_messages(channel="teams", since=ts1 + 1800.0)
+    recent_msgs, truncated, excluded_count = temp_archive.query_recent_messages(channel="teams", since=ts1 + 1800.0)
     assert truncated is False
+    assert excluded_count == 0
     assert [m["id"] for m in recent_msgs] == ["m_old_2", "m_new_1", "m_new_2"]
 
 
@@ -1151,8 +1152,9 @@ def test_recent_messages_inclusive_boundary_and_original_send_time(temp_archive:
     ]
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
-    recent_msgs, truncated = temp_archive.query_recent_messages(channel="teams", since=boundary_ts)
+    recent_msgs, truncated, excluded_count = temp_archive.query_recent_messages(channel="teams", since=boundary_ts)
     assert truncated is False
+    assert excluded_count == 0
 
     r_ids = [m["id"] for m in recent_msgs]
     # m_exact_boundary must be included (boundary second inclusive)
@@ -1179,14 +1181,16 @@ def test_recent_messages_truncation(temp_archive: Archive) -> None:
     temp_archive.ingest_messages(channel="teams", messages=msgs, source="cache")
 
     # 1. limit=3 < total 5 -> truncated=True, keep the latest 3 (m_3, m_4, m_5) oldest to newest
-    res_trunc, is_trunc = temp_archive.query_recent_messages(channel="teams", since=0.0, limit=3)
+    res_trunc, is_trunc, excluded_trunc = temp_archive.query_recent_messages(channel="teams", since=0.0, limit=3)
     assert is_trunc is True
+    assert excluded_trunc == 0
     assert len(res_trunc) == 3
     assert [m["id"] for m in res_trunc] == ["m_3", "m_4", "m_5"]
 
     # 2. limit=10 >= total 5 -> truncated=False, keep all 5 oldest to newest
-    res_all, is_all_trunc = temp_archive.query_recent_messages(channel="teams", since=0.0, limit=10)
+    res_all, is_all_trunc, excluded_all = temp_archive.query_recent_messages(channel="teams", since=0.0, limit=10)
     assert is_all_trunc is False
+    assert excluded_all == 0
     assert len(res_all) == 5
     assert [m["id"] for m in res_all] == ["m_1", "m_2", "m_3", "m_4", "m_5"]
 

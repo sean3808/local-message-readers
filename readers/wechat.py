@@ -33,7 +33,7 @@ from wechat_cli.core.messages import (
     validate_pagination,
 )
 
-from readers.settings import SETTINGS_HELP
+from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.timeparse import FORMATS_HELP, parse_time_range
 
@@ -220,6 +220,45 @@ def get_messages(app, conversation, limit, offset, start, end):
     return {"conversation": _conversation(ctx), "truncated": truncated, "messages": messages, "failures": failures}
 
 
+def _load_all_contexts(app):
+    names = get_contact_names(app.cache, app.decrypted_dir)
+    contexts, failures = [], []
+    for rel_key in app.msg_db_keys:
+        path = app.cache.get(rel_key)
+        if not path:
+            continue
+        try:
+            with closing(sqlite3.connect(path)) as conn:
+                # For a table that cannot be mapped to a conversation id, the results cannot be attributed; skip it
+                contexts.extend(
+                    c for c in _load_search_contexts_from_db(conn, path, names)
+                    if c["username"] and not is_official_account(c["username"])
+                )
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{rel_key}: {e}")
+    return contexts, failures
+
+
+def _count_messages(table_contexts, start_ts=None, end_ts=None):
+    clauses, params = _build_message_filters(start_ts, end_ts)
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    total, failures = 0, []
+    by_db = {}
+    for tc in table_contexts:
+        by_db.setdefault(tc["db_path"], []).append(tc)
+    for db_path, contexts in by_db.items():
+        try:
+            with closing(sqlite3.connect(db_path)) as conn:
+                for tc in contexts:
+                    table_name = tc["table_name"]
+                    if not _is_safe_msg_table_name(table_name):
+                        raise ValueError(f"Invalid message table name: {table_name}")
+                    total += conn.execute(f"SELECT COUNT(*) FROM [{table_name}] {where_sql}", params).fetchone()[0]
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{db_path}: {e}")
+    return total, failures
+
+
 def search(app, keyword, conversation, limit, start, end):
     start_ts, end_ts = parse_time_range(start, end)
     kw_list = [keyword] if isinstance(keyword, str) else list(keyword)
@@ -228,19 +267,7 @@ def search(app, keyword, conversation, limit, start, end):
     if conversation:
         contexts = list(_iter_table_contexts(_resolve(app, conversation)))
     else:
-        names = get_contact_names(app.cache, app.decrypted_dir)
-        contexts = []
-        for rel_key in app.msg_db_keys:
-            path = app.cache.get(rel_key)
-            if not path:
-                continue
-            try:
-                with closing(sqlite3.connect(path)) as conn:
-                    # For a table that cannot be mapped to a conversation id, the results cannot be attributed; skip it
-                    contexts.extend(c for c in _load_search_contexts_from_db(conn, path, names)
-                                    if c["username"] and not is_official_account(c["username"]))
-            except Exception as e:  # noqa: BLE001
-                failures.append(f"{rel_key}: {e}")
+        contexts, failures = _load_all_contexts(app)
     messages, truncated, collect_failures = _collect(app, contexts, limit, 0, start_ts, end_ts, keywords=kw_list)
     out = {"keywords": kw_list, "truncated": truncated, "messages": messages, "failures": failures + collect_failures}
     if len(kw_list) == 1:
@@ -248,14 +275,32 @@ def search(app, keyword, conversation, limit, start, end):
     return out
 
 
-def recent(app, since, limit):
+def recent(app, since, limit, exclude_conversations=None):
     # The reader does not keep a read position: the Local Agent remembers the last time it read up to and passes it back with --since next time (issue #2).
     # --since includes the boundary second, so messages in the same second are not missed but the previous last message reappears: the caller dedupes by (conversation_id, id)
 
     # Fetch one extra message to detect truncation; when truncated, keep the latest `limit` messages and the caller should raise --limit to read the rest
-    result = search(app, "", "", limit, since, "")
-    return {"since": since, "truncated": result["truncated"], "messages": result["messages"],
-            "failures": result["failures"]}
+    start_ts, end_ts = parse_time_range(since, "")
+    excluded_ids = {cid for cid in (exclude_conversations or ()) if cid}
+    contexts, failures = _load_all_contexts(app)
+    if excluded_ids:
+        included = [c for c in contexts if c["username"] not in excluded_ids]
+        excluded_contexts = [c for c in contexts if c["username"] in excluded_ids]
+    else:
+        included = contexts
+        excluded_contexts = []
+    messages, truncated, collect_failures = _collect(app, included, limit, 0, start_ts, end_ts)
+    if excluded_contexts:
+        excluded_messages, count_failures = _count_messages(excluded_contexts, start_ts, end_ts)
+    else:
+        excluded_messages, count_failures = 0, []
+    return {
+        "since": since,
+        "truncated": truncated,
+        "excluded_messages": excluded_messages,
+        "messages": messages,
+        "failures": failures + collect_failures + count_failures,
+    }
 
 
 def _parser():
@@ -297,7 +342,8 @@ def _run(args):
     if args.cmd == "messages":
         return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end)
     if args.cmd == "recent":
-        return recent(app, args.since, args.limit)
+        excluded = get_setting("wechat_exclude_conversations") or []
+        return recent(app, args.since, args.limit, exclude_conversations=excluded)
     return search(app, args.keywords, args.conversation, args.limit, args.start, args.end)
 
 

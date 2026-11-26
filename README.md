@@ -64,7 +64,7 @@ uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
 ```
 
-The reader does not remember what it has already shown you; whoever calls `recent` keeps the `--since` time. The safest value is the `time` of the last message read, passed back unchanged: it carries its time zone offset, so it still points to the same moment after the computer's time zone changes. A time typed without an offset means this computer's local time. Official accounts (subscription and service accounts) are left out of `conversations`, `search` and `recent`.
+The reader does not remember what it has already shown you; whoever calls `recent` keeps the `--since` time. The safest value is the `time` of the last message read, passed back unchanged: it carries its time zone offset, so it still points to the same moment after the computer's time zone changes. A time typed without an offset means this computer's local time. Official accounts (subscription and service accounts) are left out of `conversations`, `search` and `recent`. To skip noisy conversations in `recent` (for example a game group), list their IDs in `wechat_exclude_conversations` in `settings.toml`; exclusion runs before `--limit`, and `recent` reports `excluded_messages` for the whole range (`conversations`, `messages` and `search` still return them).
 
 ### 3. Teams: first sync
 
@@ -77,7 +77,7 @@ uv run teams-reader conversations
 
 Look at `refresh.status` and `refresh.current_up_to` in the JSON: they say whether the sync worked and how far the data reaches. When a query runs within `refresh_min_interval_seconds` (default `120`, configured in `%LOCALAPPDATA%\local-message-readers\settings.toml`; `0` disables throttling) of the last clean refresh of the same Teams profile (one that succeeded with no `failures`), the refresh is skipped (`refresh.status` is `"skipped"` with `refresh.reason`). Pass `--refresh` to force a refresh, or `--no-refresh` to always skip (passing both together is an error); for multi-step investigations, you can pass multiple keywords to `search` in one call, or refresh once with `--refresh` and pass `--no-refresh` for follow-up queries. Both `messages` and `search` keep the newest `--limit` results (returned oldest to newest) and report `truncated`. If you have the official Teams export for older history, add it with `uv run teams-reader import-export <export file>` (take a backup first, see step 5). Querying never changes the unread state in Teams. If you also open a conversation in Teams itself, Teams marks it as read.
 
-If the profile folder is not in the standard place, set `profile_dir` in `%LOCALAPPDATA%\local-message-readers\settings.toml` or pass `--profile-dir`.
+If the profile folder is not in the standard place, set `profile_dir` in `%LOCALAPPDATA%\local-message-readers\settings.toml` or pass `--profile-dir`. To skip noisy conversations in `recent`, list their IDs in `teams_exclude_conversations` in `settings.toml`; exclusion runs before `--limit`, and `recent` reports `excluded_messages` for the whole range (`conversations`, `messages` and `search` still return them).
 
 When looking up a conversation by display name, if multiple 1:1 conversations share that name with distinct `last_time` values, `teams-reader` picks the newest one and lists the others under `alternatives` (`[{id, last_time}]`); if any candidate is a group or two tie on `last_time`, it returns an error listing each `id` so you can pick one.
 

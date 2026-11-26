@@ -30,10 +30,19 @@ def test_settings_example_lists_every_known_key():
 
 
 def test_reads_values_from_explicit_file(tmp_path):
-    path = write(tmp_path, 'backup_dest = "X:/dest"\nteams_self_id = " 8:abc "\n[smoke]\nwechat = true\n')
+    path = write(
+        tmp_path,
+        'backup_dest = "X:/dest"\n'
+        'teams_self_id = " 8:abc "\n'
+        'wechat_exclude_conversations = ["12345678@chatroom"]\n'
+        'teams_exclude_conversations = ["19:example@thread.v2"]\n'
+        '[smoke]\nwechat = true\n',
+    )
     configure(path)
     assert get_path_setting("backup_dest") == Path("X:/dest")
     assert get_setting("teams_self_id") == "8:abc"
+    assert get_setting("wechat_exclude_conversations") == ["12345678@chatroom"]
+    assert get_setting("teams_exclude_conversations") == ["19:example@thread.v2"]
     assert get_setting("wechat", section="smoke") is True
     assert get_setting("archive_path") is None
 
@@ -61,6 +70,14 @@ def test_missing_explicit_file_names_the_file(tmp_path):
         ('refresh_min_interval_seconds = "120"\n', "refresh_min_interval_seconds"),
         ('refresh_min_interval_seconds = true\n', "refresh_min_interval_seconds"),
         ('refresh_min_interval_seconds = 1.5\n', "refresh_min_interval_seconds"),
+        ('wechat_exclude_conversations = "123@chatroom"\n', "wechat_exclude_conversations"),
+        ('wechat_exclude_conversations = [123]\n', "wechat_exclude_conversations"),
+        ('wechat_exclude_conversations = [""]\n', "wechat_exclude_conversations"),
+        ('wechat_exclude_conversations = [" 123@chatroom "]\n', "wechat_exclude_conversations"),
+        ('teams_exclude_conversations = "19:a@thread.v2"\n', "teams_exclude_conversations"),
+        ('teams_exclude_conversations = [123]\n', "teams_exclude_conversations"),
+        ('teams_exclude_conversations = [""]\n', "teams_exclude_conversations"),
+        ('teams_exclude_conversations = [" 19:a@thread.v2 "]\n', "teams_exclude_conversations"),
     ],
 )
 def test_invalid_content_names_file_and_key(tmp_path, text, key):

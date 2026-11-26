@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1513,29 +1513,56 @@ class Archive:
         channel: str,
         since: str | float,
         limit: int = 100,
-    ) -> tuple[list[dict[str, Any]], bool]:
+        exclude_conversations: Collection[str] | None = None,
+    ) -> tuple[list[dict[str, Any]], bool, int]:
         """Query all messages (across all conversations) after a given time (boundary second included).
 
-        Determined by original send time; if the total exceeds limit, truncated to the latest `limit` rows,
-        and returns (messages oldest to newest, truncated: bool).
+        Determined by original send time; excludes any conversation in `exclude_conversations`
+        before applying `limit`. Returns (messages oldest to newest, truncated: bool, excluded_messages: int).
         """
         since_ts = parse_time_bound(since, is_end=False)
         if since_ts is None:
             raise ValueError(f"Invalid time format: '{since}'")
 
-        query = """
-            SELECT id, conversation_id, time, timestamp, sender_id, sender,
-                   is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
-            FROM messages
-            WHERE channel = ? AND timestamp >= ?
-            ORDER BY timestamp DESC, id DESC
-            LIMIT ?
-        """
+        excluded_ids = sorted({cid for cid in (exclude_conversations or ()) if cid})
         # Fetch one extra row to determine truncation
         fetch_limit = limit + 1 if limit > 0 else 101
 
         with closing(self._connect()) as conn:
-            rows = conn.execute(query, (channel, since_ts, fetch_limit)).fetchall()
+            if excluded_ids:
+                placeholders = ", ".join("?" for _ in excluded_ids)
+                excluded_count = conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM messages
+                    WHERE channel = ? AND timestamp >= ? AND conversation_id IN ({placeholders})
+                    """,
+                    (channel, since_ts, *excluded_ids),
+                ).fetchone()[0]
+                rows = conn.execute(
+                    f"""
+                    SELECT id, conversation_id, time, timestamp, sender_id, sender,
+                           is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
+                    FROM messages
+                    WHERE channel = ? AND timestamp >= ? AND conversation_id NOT IN ({placeholders})
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (channel, since_ts, *excluded_ids, fetch_limit),
+                ).fetchall()
+            else:
+                excluded_count = 0
+                rows = conn.execute(
+                    """
+                    SELECT id, conversation_id, time, timestamp, sender_id, sender,
+                           is_self, type, text, version, deleted, edited, files, attachments, quoted, sources
+                    FROM messages
+                    WHERE channel = ? AND timestamp >= ?
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (channel, since_ts, fetch_limit),
+                ).fetchall()
 
         truncated = len(rows) > limit
         if truncated:
@@ -1543,4 +1570,4 @@ class Archive:
 
         results = [_row_to_message(r, has_sources=True) for r in rows]
         results.reverse()
-        return results, truncated
+        return results, truncated, excluded_count
