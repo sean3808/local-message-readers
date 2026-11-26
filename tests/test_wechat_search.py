@@ -213,3 +213,41 @@ def test_wechat_recent_unchanged_schema(
         assert "matched_keywords" not in m
         assert "conversation_name" not in m
         assert "is_group" not in m
+
+
+def test_wechat_search_keeps_same_local_id_from_different_databases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """local_id is unique only inside one message database; the multi-keyword de-duplication must not merge two databases' rows."""
+    table = "Msg_33333333333333333333333333333333"
+    contexts = []
+    for n, (ts, body) in enumerate([(1794285100, "older telex release"), (1794285200, "newer telex release")]):
+        db_path = tmp_path / f"msg_{n}.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
+        conn.execute("INSERT INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_alice')")
+        conn.execute(
+            f"CREATE TABLE {table} (local_id INTEGER PRIMARY KEY, local_type INTEGER, create_time INTEGER, "
+            "real_sender_id INTEGER, message_content BLOB, WCDB_CT_message_content INTEGER)"
+        )
+        conn.execute(f"INSERT INTO {table} VALUES (1, 1, ?, 1, ?, 0)", (ts, body))
+        conn.commit()
+        conn.close()
+        contexts.append(
+            {"db_path": str(db_path), "table_name": table, "username": "wxid_alice",
+             "display_name": "Alice Example", "is_group": False}
+        )
+    fake_app = SimpleNamespace(
+        cache=None, decrypted_dir=str(tmp_path), db_dir=str(tmp_path), msg_db_keys=[],
+        display_name_fn=lambda uid, m: m.get(uid, uid),
+    )
+    monkeypatch.setattr(wechat, "get_contact_names", lambda cache, dec_dir: {"wxid_alice": "Alice Example"})
+    monkeypatch.setattr(wechat, "get_self_username", lambda db_dir, cache, dec_dir: "wxid_self")
+
+    messages, truncated, failures = wechat._collect(fake_app, contexts, 1, 0, None, None, ["telex release", "release"])
+    assert (truncated, failures) == (True, [])
+    assert [m["text"] for m in messages] == ["newer telex release"]
+
+    messages, truncated, failures = wechat._collect(fake_app, contexts, 5, 0, None, None, ["telex release", "release"])
+    assert (truncated, failures) == (False, [])
+    assert [m["text"] for m in messages] == ["older telex release", "newer telex release"]

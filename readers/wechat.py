@@ -149,7 +149,8 @@ def _collect(app, table_contexts, limit, offset, start_ts=None, end_ts=None, key
         seen = set()
         deduped = []
         for item in candidates:
-            key = (item[1]["username"], item[0][0])
+            # local_id is unique only inside one message database: the same conversation can have a table in several of them
+            key = (item[1]["db_path"], item[1]["username"], item[0][0])
             if key not in seen:
                 seen.add(key)
                 deduped.append(item)
