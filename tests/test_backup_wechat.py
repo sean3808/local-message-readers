@@ -174,6 +174,20 @@ def test_collect_wechat_snapshots_db_and_omits_wal_shm(inputs, tmp_path):
         assert rconn.execute("SELECT id, body FROM chat ORDER BY id").fetchall() == [(1, "committed")]
 
 
+def test_collect_wechat_matches_db_suffix_case_insensitively(inputs, tmp_path):
+    db_storage = inputs[1] / "db_storage"
+    (db_storage / "Upper.DB").write_bytes(b"\x00" * 4096)
+    (db_storage / "Upper.DB-wal").write_bytes(b"")
+    (db_storage / "Upper.DB-shm").write_bytes(b"shm")
+
+    report, code = run(inputs, tmp_path)
+    assert code == 0
+    files = extract(report, tmp_path)
+    assert "wechat/wxid_fake/db_storage/Upper.DB" in files
+    assert "wechat/wxid_fake/db_storage/Upper.DB-wal" not in files
+    assert "wechat/wxid_fake/db_storage/Upper.DB-shm" not in files
+
+
 def test_collect_wechat_corrupt_wal_fails_wechat_preserves_teams(inputs, tmp_path):
     account = inputs[1]
     (account / "db_storage" / "broken.db").write_bytes(b"\x00" * 4096)

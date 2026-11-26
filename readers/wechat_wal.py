@@ -91,12 +91,15 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
                 main_valid = min(main_valid, commit_size)
                 for stale in [p for p in overrides if p > commit_size]:
                     del overrides[stale]
-            for required in range(db_size + 1, commit_size + 1):
-                if required not in overrides:
-                    raise ValueError(f"Committed WAL references missing page {required}")
             db_size = commit_size
 
         offset += frame_size
+
+    # Only the final committed state must be complete: after a checkpoint has truncated
+    # main, an earlier commit in the same WAL may reference pages that no longer exist.
+    for required in range(main_valid + 1, db_size + 1):
+        if required not in overrides:
+            raise ValueError(f"Committed WAL references missing page {required}")
 
     out = bytearray(main[: main_valid * page_size])
     out.extend(bytes((db_size - main_valid) * page_size))
@@ -186,18 +189,19 @@ def read_snapshot(
             raise FileNotFoundError(f"WeChat database not found: {source}")
         before_wal = _stat_signature(wal_path)
 
-        main_bytes = reader(source)
-        if before_wal is not None:
-            try:
-                wal_bytes = reader(wal_path)
-            except FileNotFoundError:
-                continue
-        else:
-            wal_bytes = b""
+        # Read the WAL on both sides of the main read. A checkpoint that rewrites main and
+        # resets the WAL in place during the main read can keep (size, mtime_ns, ino) equal
+        # at coarse timestamp resolution, but it changes the WAL contents (new salt).
+        try:
+            wal_before = reader(wal_path) if before_wal is not None else b""
+            main_bytes = reader(source)
+            wal_bytes = reader(wal_path) if before_wal is not None else b""
+        except FileNotFoundError:
+            continue
 
         after_db = _stat_signature(source)
         after_wal = _stat_signature(wal_path)
-        if (before_db, before_wal) == (after_db, after_wal):
+        if (before_db, before_wal) == (after_db, after_wal) and wal_before == wal_bytes:
             return merge_committed_pages(main_bytes, wal_bytes)
 
     raise RuntimeError(f"WeChat database changed during {attempts} snapshot attempts: {source}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import struct
 import sys
@@ -155,6 +156,19 @@ def test_merge_committed_pages_growth_and_shrink_without_resurrection() -> None:
     assert merge_committed_pages(main, wal_regrow) == _page(1) + _page(20) + _page(30) + _page(40)
 
 
+def test_merge_committed_pages_accepts_stale_commit_after_checkpoint_truncated_main() -> None:
+    # A checkpoint already shrank main to 3 pages; the WAL still holds an earlier commit
+    # (size 4, page 4 not in the WAL) followed by the commit that shrank to 3 pages.
+    main = _page(1) + _page(2) + _page(3)
+    wal = _build_wal(
+        [
+            (2, 4, _page(20), None),
+            (3, 3, _page(30), None),
+        ]
+    )
+    assert merge_committed_pages(main, wal) == _page(1) + _page(20) + _page(30)
+
+
 def _xor_bytes(data: bytes, key: int = 0x5A) -> bytes:
     return bytes(b ^ key for b in data)
 
@@ -269,6 +283,51 @@ def test_read_snapshot_retries_when_wal_appears_mid_read(tmp_path: Path) -> None
     result = read_snapshot(db_path, attempts=3, reader=appearing_reader)
     assert triggered is True
     assert result == _page(33)
+
+
+def test_read_snapshot_retries_when_wal_generation_changes_during_main_read(tmp_path: Path) -> None:
+    # While main is being read, a checkpoint writes transaction A into main and the WAL is
+    # reset in place for transaction B with the same size, inode and (restored) mtimes.
+    # Stat alone cannot see it; merging B onto the pre-A main would silently lose A.
+    db_path = tmp_path / "gen.db"
+    wal_path = tmp_path / "gen.db-wal"
+    db_path.write_bytes(_page(1) + _page(2))
+    wal_path.write_bytes(_build_wal([(1, 2, _page(10), None)], salt=(1, 1)))  # transaction A
+    wal_b = _build_wal([(2, 2, _page(20), None)], salt=(2, 2))  # transaction B, same size
+    assert len(wal_b) == wal_path.stat().st_size
+
+    swapped = False
+
+    def checkpointing_reader(path: Path) -> bytes:
+        nonlocal swapped
+        data = path.read_bytes()
+        if path == db_path and not swapped:
+            swapped = True
+            db_times = db_path.stat()
+            wal_times = wal_path.stat()
+            db_path.write_bytes(_page(10) + _page(2))  # checkpoint of A, same size
+            wal_path.write_bytes(wal_b)
+            os.utime(db_path, ns=(db_times.st_atime_ns, db_times.st_mtime_ns))
+            os.utime(wal_path, ns=(wal_times.st_atime_ns, wal_times.st_mtime_ns))
+        return data
+
+    assert read_snapshot(db_path, attempts=3, reader=checkpointing_reader) == _page(10) + _page(20)
+
+
+def test_read_snapshot_retries_when_main_vanishes_mid_read(tmp_path: Path) -> None:
+    db_path = tmp_path / "vanish.db"
+    db_path.write_bytes(_page(1))
+    failed = False
+
+    def flaky_reader(path: Path) -> bytes:
+        nonlocal failed
+        if path == db_path and not failed:
+            failed = True
+            raise FileNotFoundError(path)
+        return path.read_bytes()
+
+    assert read_snapshot(db_path, attempts=3, reader=flaky_reader) == _page(1)
+    assert failed is True
 
 
 def test_read_snapshot_raises_on_persistent_change(tmp_path: Path) -> None:
