@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -17,8 +18,13 @@ from wechat_cli.core.messages import _XML_UNSAFE_RE
 
 from readers import wechat, wechat_media
 
-MSG_TABLE = "Msg_11111111111111111111111111111111"
-MSG_TABLE_2 = "Msg_22222222222222222222222222222222"
+
+def _msg_table(username: str) -> str:
+    return "Msg_" + hashlib.md5(username.encode("utf-8")).hexdigest()
+
+
+MSG_TABLE = _msg_table("wxid_alice")
+MSG_TABLE_GROUP = _msg_table("1001@chatroom")
 
 
 def _iso(ts: int) -> str:
@@ -79,21 +85,27 @@ def _make_hardlink_db(db_path: Path) -> sqlite3.Connection:
 
 
 def _make_msg_db(db_path: Path, table_name: str = MSG_TABLE) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE IF NOT EXISTS Name2Id (rowid INTEGER PRIMARY KEY, user_name TEXT)")
     conn.execute("INSERT OR IGNORE INTO Name2Id (rowid, user_name) VALUES (1, 'wxid_alice')")
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS {table_name} (
-            local_id INTEGER PRIMARY KEY,
-            local_type INTEGER,
-            create_time INTEGER,
-            real_sender_id INTEGER,
-            message_content BLOB,
-            WCDB_CT_message_content INTEGER
-        )
-    """)
+    if table_name:
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                local_id INTEGER PRIMARY KEY,
+                local_type INTEGER,
+                create_time INTEGER,
+                real_sender_id INTEGER,
+                message_content BLOB,
+                WCDB_CT_message_content INTEGER
+            )
+        """)
     conn.commit()
     return conn
+
+
+def _shard_db_path(tmp_path: Path, idx: int = 0) -> Path:
+    return tmp_path / "wxid_account" / "db_storage" / "message" / f"message_{idx}.db"
 
 
 def _setup_wechat_env(
@@ -102,7 +114,10 @@ def _setup_wechat_env(
     *,
     hardlink_db: Path | None = None,
     msg_dbs: list[tuple[Path, str]] | None = None,
+    extra_msg_db_keys: list[str] | None = None,
+    cache_overrides: dict[str, str | None] | None = None,
     is_group: bool = False,
+    db_dir_override: str | None = None,
 ) -> tuple[Path, Path]:
     account_root = tmp_path / "wxid_account"
     db_dir = account_root / "db_storage"
@@ -112,16 +127,22 @@ def _setup_wechat_env(
 
     contexts = []
     msg_db_keys = []
+    key_to_path: dict[str, str | None] = {}
     if msg_dbs is None:
-        default_db = tmp_path / "msg_0.db"
-        _make_msg_db(default_db).close()
-        msg_dbs = [(default_db, MSG_TABLE)]
+        default_db = _shard_db_path(tmp_path, 0)
+        _make_msg_db(default_db, MSG_TABLE_GROUP if is_group else MSG_TABLE).close()
+        msg_dbs = [(default_db, MSG_TABLE_GROUP if is_group else MSG_TABLE)]
 
     conv_id = "1001@chatroom" if is_group else "wxid_alice"
     conv_name = "Logistics Group" if is_group else "Alice Example"
     for idx, (db_path, table_name) in enumerate(msg_dbs):
-        key = f"message/msg_{idx}.db"
-        msg_db_keys.append(key)
+        rel_key = os.path.join("message", f"message_{idx}.db")
+        disk_path = db_dir / rel_key
+        if db_path.exists() and disk_path != db_path and not disk_path.exists():
+            disk_path.parent.mkdir(parents=True, exist_ok=True)
+            disk_path.write_bytes(db_path.read_bytes())
+        msg_db_keys.append(rel_key)
+        key_to_path[rel_key] = str(db_path)
         contexts.append({
             "db_path": str(db_path),
             "table_name": table_name,
@@ -130,19 +151,23 @@ def _setup_wechat_env(
             "is_group": is_group,
         })
 
+    if extra_msg_db_keys:
+        msg_db_keys.extend(extra_msg_db_keys)
+    if cache_overrides:
+        key_to_path.update(cache_overrides)
+
     class FakeCache:
         def get(self, key: str) -> str | None:
             if key == os.path.join("hardlink", "hardlink.db"):
                 return str(hardlink_db) if hardlink_db is not None else None
-            for idx, (db_path, _) in enumerate(msg_dbs):
-                if key == f"message/msg_{idx}.db":
-                    return str(db_path)
+            if key in key_to_path:
+                return key_to_path[key]
             return str(msg_dbs[0][0])
 
     fake_app = SimpleNamespace(
         cache=FakeCache(),
         decrypted_dir=str(tmp_path),
-        db_dir=str(db_dir),
+        db_dir=db_dir_override or str(db_dir),
         msg_db_keys=msg_db_keys,
         display_name_fn=lambda uid, m: m.get(uid, uid),
     )
@@ -185,11 +210,10 @@ def _run_download(
 def test_download_file_type_1_and_type_6(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
-    # Type 1 uses dir1; Type 6 uses dir2
     file1_dir = msg_root / "file" / "2026-11"
     file1_dir.mkdir(parents=True)
     (file1_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\nhello")
@@ -218,6 +242,8 @@ def test_download_file_type_1_and_type_6(
     assert code1 == 0
     assert out1["conversation"] == {"id": "wxid_alice", "name": "Alice Example", "is_group": False}
     assert out1["message_id"] == 101
+    assert out1["time"] == _iso(1794285100)
+    assert out1["timestamp"] == 1794285100
     assert out1["failures"] == []
     assert out1["items"] == [{
         "kind": "file",
@@ -253,7 +279,7 @@ def test_download_plaintext_image_dat_detected_suffix(
     magic: bytes,
     expected_ext: str,
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -304,7 +330,7 @@ def test_download_encrypted_or_unrecognized_image(
     capsys: pytest.CaptureFixture[str],
     payload: bytes,
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -341,7 +367,7 @@ def test_download_encrypted_or_unrecognized_image(
 def test_download_video_and_thumbnail(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -391,7 +417,7 @@ def test_download_video_and_thumbnail(
 def test_download_image_md5_before_originsourcemd5_priority(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -434,7 +460,7 @@ def test_download_image_md5_before_originsourcemd5_priority(
 def test_download_not_found_states(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -461,7 +487,6 @@ def test_download_not_found_states(
     assert c2 == 1
     assert o2["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_NO_HARDLINK_ROW}]
 
-    # Missing hardlink.db
     _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
     c3, o3 = _run_download(tmp_path, 501, "wxid_alice", dest, capsys)
     assert c3 == 1
@@ -475,7 +500,7 @@ def test_download_not_found_states(
 def test_download_duplicates_identical_vs_distinct_and_missing_candidates(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -529,13 +554,58 @@ def test_download_duplicates_identical_vs_distinct_and_missing_candidates(
     assert o3["items"][0]["status"] == "resolved"
 
 
+def test_download_hash_file_oserror_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = _shard_db_path(tmp_path, 0)
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    d1 = msg_root / "file" / "2026-10"
+    d2 = msg_root / "file" / "2026-11"
+    d1.mkdir(parents=True)
+    d2.mkdir(parents=True)
+    (d1 / "dup.txt").write_bytes(b"same")
+    (d2 / "dup.txt").write_bytes(b"same")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-10'), (2, '2026-11')")
+    _add_file_link(hl, "abcd" * 8, "dup.txt", dir1=1)
+    _add_file_link(hl, "abcd" * 8, "dup.txt", dir1=2)
+    hl.commit()
+    hl.close()
+
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 610, 49, 1794285100, _file_xml("abcd" * 8))
+    mconn.commit()
+    mconn.close()
+
+    orig_hash = wechat_media._hash_file
+    calls = {"n": 0}
+
+    def fail_first_hash(path: str):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("unreadable candidate")
+        return orig_hash(path)
+
+    monkeypatch.setattr(wechat_media, "_hash_file", fail_first_hash)
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 610, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert out["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_FILE_MISSING}]
+    assert list(dest.iterdir()) == []
+
+
 def test_download_unsupported_and_group_prefix_xml(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(
-        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)], is_group=True
+        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE_GROUP)], is_group=True
     )
 
     fdir = msg_root / "file" / "2026-11"
@@ -548,14 +618,18 @@ def test_download_unsupported_and_group_prefix_xml(
     hl.commit()
     hl.close()
 
-    mconn = _make_msg_db(msg_db)
-    _add_msg(mconn, 701, 1, 1794285100, "wxid_alice:\nhello")
-    _add_msg(mconn, 702, 47, 1794285200, "wxid_alice:\n<msg></msg>")
-    _add_msg(mconn, 703, 49, 1794285300, "wxid_alice:\n<msg><appmsg><type>19</type></appmsg></msg>")
-    _add_msg(mconn, 704, 3, 1794285400, "wxid_alice:\n<msg><broken")
-    _add_msg(mconn, 705, 3, 1794285500, b"\x00\xffrawbytes", ct=4)
+    mconn = _make_msg_db(msg_db, MSG_TABLE_GROUP)
+    _add_msg(mconn, 701, 1, 1794285100, "wxid_alice:\nhello", table=MSG_TABLE_GROUP)
+    _add_msg(mconn, 702, 47, 1794285200, "wxid_alice:\n<msg></msg>", table=MSG_TABLE_GROUP)
+    _add_msg(mconn, 703, 49, 1794285300, "wxid_alice:\n<msg><appmsg><type>19</type></appmsg></msg>", table=MSG_TABLE_GROUP)
+    _add_msg(mconn, 704, 3, 1794285400, "wxid_alice:\n<msg><broken", table=MSG_TABLE_GROUP)
+    _add_msg(mconn, 705, 3, 1794285500, b"\x00\xffrawbytes", ct=4, table=MSG_TABLE_GROUP)
     cctx = zstandard.ZstdCompressor()
-    _add_msg(mconn, 706, 49, 1794285600, cctx.compress(_file_xml("7777" * 8, prefix="wxid_alice:\n").encode()), ct=4)
+    _add_msg(
+        mconn, 706, 49, 1794285600,
+        cctx.compress(_file_xml("7777" * 8, prefix="wxid_alice:\n").encode()),
+        ct=4, table=MSG_TABLE_GROUP,
+    )
     mconn.commit()
     mconn.close()
 
@@ -581,7 +655,7 @@ def test_download_unsupported_and_group_prefix_xml(
 def test_download_unsafe_xml_doctype_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
 
     unsafe_xml = '<!DOCTYPE foo [<!ENTITY xxe "bar">]><msg><img md5="aaaa" /></msg>'
@@ -602,7 +676,7 @@ def test_download_unsafe_xml_doctype_rejected(
 def test_download_path_traversal_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -638,7 +712,7 @@ def test_download_path_traversal_rejected(
 def test_download_symlink_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -680,7 +754,7 @@ def test_download_junction_reparse_point_rejected(
     except (ImportError, AttributeError) as exc:
         pytest.skip(f"_winapi.CreateJunction unavailable: {exc}")
 
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -714,7 +788,7 @@ def test_download_junction_reparse_point_rejected(
 def test_download_dir2id_unresolved(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -739,7 +813,7 @@ def test_download_dir2id_unresolved(
 def test_download_source_changed_mid_copy_and_no_overwrite(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -796,7 +870,7 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
 def test_download_arg_and_lookup_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     m1 = _make_msg_db(msg_db)
     _add_msg(m1, 50, 1, 1794285100, "hello")
     m1.commit()
@@ -822,7 +896,7 @@ def test_download_arg_and_lookup_errors(
 def test_download_temp_dir_deleted_after_main(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_fixture = tmp_path / "fixture_hl.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_fixture, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -865,9 +939,19 @@ def test_download_temp_dir_deleted_after_main(
 def test_download_hidden_unopened_shard_in_msg_db_keys_fails_closed_without_time(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
+    hidden_db = _shard_db_path(tmp_path, 1)
+    hidden_db.parent.mkdir(parents=True, exist_ok=True)
+    hidden_db.write_bytes(b"encrypted-on-disk")
     hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[(msg_db, MSG_TABLE)],
+        extra_msg_db_keys=[os.path.join("message", "message_1.db")],
+        cache_overrides={os.path.join("message", "message_1.db"): None},
+    )
 
     fdir = msg_root / "file" / "2026-11"
     fdir.mkdir(parents=True)
@@ -885,25 +969,6 @@ def test_download_hidden_unopened_shard_in_msg_db_keys_fails_closed_without_time
     mconn.commit()
     mconn.close()
 
-    # Add a second msg_db_key whose cache.get() returns None (hidden/unreadable shard)
-    class PartialCache:
-        def get(self, key: str) -> str | None:
-            if key == "message/msg_1.db":
-                return None
-            if key == os.path.join("hardlink", "hardlink.db"):
-                return str(hl_db)
-            return str(msg_db)
-
-    account_root = tmp_path / "wxid_account"
-    fake_app = SimpleNamespace(
-        cache=PartialCache(),
-        decrypted_dir=str(tmp_path),
-        db_dir=str(account_root / "db_storage"),
-        msg_db_keys=["message/msg_0.db", "message/msg_1.db"],
-        display_name_fn=lambda uid, m: m.get(uid, uid),
-    )
-    monkeypatch.setattr(wechat, "AppContext", lambda: fake_app)
-
     dest = tmp_path / "out"
     dest.mkdir()
 
@@ -918,10 +983,102 @@ def test_download_hidden_unopened_shard_in_msg_db_keys_fails_closed_without_time
     assert o_with_time["items"][0]["name"] == "one.pdf"
 
 
+def test_download_six_shards_absent_empty_and_populated_and_missing_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hl_db = tmp_path / "hardlink.db"
+    shards = [_shard_db_path(tmp_path, i) for i in range(6)]
+    # Shards 0,1: absent table; 2,3: empty table; 4: populated; 5: absent table
+    _make_msg_db(shards[0], table_name="").close()
+    _make_msg_db(shards[1], table_name="").close()
+    _make_msg_db(shards[2], MSG_TABLE).close()
+    _make_msg_db(shards[3], MSG_TABLE).close()
+    m4 = _make_msg_db(shards[4], MSG_TABLE)
+    ts = 1794285100
+    _add_msg(m4, 81, 49, ts, _file_xml("aa11" * 8))
+    m4.commit()
+    m4.close()
+    _make_msg_db(shards[5], table_name="").close()
+
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[(p, MSG_TABLE) for p in shards],
+        # Listed key whose file does not exist on disk must be skipped cleanly
+        extra_msg_db_keys=[os.path.join("message", "message_missing_disk.db")],
+        cache_overrides={os.path.join("message", "message_missing_disk.db"): None},
+    )
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "six.pdf").write_bytes(b"%PDF-six")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "aa11" * 8, "six.pdf")
+    hl.commit()
+    hl.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 81, "wxid_alice", dest, capsys)
+    assert code == 0
+    assert out["failures"] == []
+    assert out["items"][0]["name"] == "six.pdf"
+
+
+def test_download_corrupt_shard_fails_closed_without_time_and_records_with_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    good_db = _shard_db_path(tmp_path, 0)
+    corrupt_db = _shard_db_path(tmp_path, 1)
+    corrupt_db.parent.mkdir(parents=True, exist_ok=True)
+    corrupt_db.write_bytes(b"not a sqlite database at all")
+    hl_db = tmp_path / "hardlink.db"
+
+    ts = 1794285100
+    m0 = _make_msg_db(good_db, MSG_TABLE)
+    _add_msg(m0, 82, 49, ts, _file_xml("aa22" * 8))
+    m0.commit()
+    m0.close()
+
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[(good_db, MSG_TABLE), (corrupt_db, MSG_TABLE)],
+    )
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "corrupt_ok.pdf").write_bytes(b"%PDF-ok")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "aa22" * 8, "corrupt_ok.pdf")
+    hl.commit()
+    hl.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    c1, o1 = _run_download(tmp_path, 82, "wxid_alice", dest, capsys)
+    assert c1 == 1
+    assert len(o1["failures"]) == 1
+    assert "message_1.db" in o1["failures"][0]
+    assert str(corrupt_db) not in o1["failures"][0]
+    assert list(dest.iterdir()) == []
+
+    c2, o2 = _run_download(tmp_path, 82, "wxid_alice", dest, capsys, msg_time=_iso(ts))
+    assert c2 == 0
+    assert len(o2["failures"]) == 1
+    assert o2["items"][0]["name"] == "corrupt_ok.pdf"
+
+
 def test_download_hardlink_db_in_hash_and_space_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     special_dir = tmp_path / "dir #1 with space"
     special_dir.mkdir()
     hl_db = special_dir / "hardlink.db"
@@ -949,12 +1106,18 @@ def test_download_hardlink_db_in_hash_and_space_path(
     assert out["items"][0]["name"] == "hashpath.pdf"
 
 
-def test_download_rejects_destination_inside_account_folder(
+def test_download_rejects_destination_inside_account_folder_and_trailing_slash(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     _make_msg_db(msg_db).close()
-    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
+    account_root, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=None,
+        msg_dbs=[(msg_db, MSG_TABLE)],
+        db_dir_override=str(tmp_path / "wxid_account" / "db_storage") + os.sep,
+    )
 
     for bad_dest in (account_root, msg_root):
         code, out = _run_download(tmp_path, 1, "wxid_alice", bad_dest, capsys)
@@ -962,10 +1125,42 @@ def test_download_rejects_destination_inside_account_folder(
         assert "account" in out["error"].lower()
 
 
+def test_download_rejects_destination_via_account_and_msg_junctions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    try:
+        import _winapi
+        create_junction = _winapi.CreateJunction
+    except (ImportError, AttributeError) as exc:
+        pytest.skip(f"_winapi.CreateJunction unavailable: {exc}")
+
+    msg_db = _shard_db_path(tmp_path, 0)
+    _make_msg_db(msg_db).close()
+    account_root, _ = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    # Remove plain msg dir and replace with junction <account>/msg -> tmp/real_msg
+    msg_link = account_root / "msg"
+    msg_link.rmdir()
+    real_msg = tmp_path / "real_msg"
+    real_msg.mkdir()
+    (real_msg / "x").mkdir()
+    create_junction(str(real_msg), str(msg_link))
+
+    # Also create junction <account>/msg/file -> tmp/real_file
+    real_file = tmp_path / "real_file"
+    real_file.mkdir()
+    create_junction(str(real_file), str(msg_link / "file"))
+
+    for bad_dest in (real_msg / "x", real_file):
+        code, out = _run_download(tmp_path, 1, "wxid_alice", bad_dest, capsys, msg_time="2026-11-10 10:00:00")
+        assert code == 1
+        assert "account" in out["error"].lower()
+
+
 def test_download_nested_type6_appmsg_in_compound_card_unsupported(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
 
@@ -1004,7 +1199,7 @@ def test_download_nested_type6_appmsg_in_compound_card_unsupported(
 def test_existing_messages_subcommand_json_unchanged(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    msg_db = tmp_path / "msg_0.db"
+    msg_db = _shard_db_path(tmp_path, 0)
     mconn = _make_msg_db(msg_db)
     _add_msg(mconn, 1, 1, 1794285100, "hello")
     mconn.commit()
@@ -1026,8 +1221,8 @@ def test_existing_messages_subcommand_json_unchanged(
 def _setup_two_shard_files(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> tuple[Path, Path, Path]:
-    db1 = tmp_path / "msg_0.db"
-    db2 = tmp_path / "msg_1.db"
+    db1 = _shard_db_path(tmp_path, 0)
+    db2 = _shard_db_path(tmp_path, 1)
     hl_db = tmp_path / "hardlink.db"
     _, msg_root = _setup_wechat_env(
         monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(db1, MSG_TABLE), (db2, MSG_TABLE)]
@@ -1137,72 +1332,3 @@ def test_download_sharded_identical_duplicate_deduped_and_same_time_tie(
     assert c_tie == 1
     assert "same time" in o_tie["error"]
     assert [a["timestamp"] for a in o_tie["alternatives"]] == [ts_tie, ts_tie]
-
-
-def test_download_unreadable_shard_fails_closed_without_time(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    good_db = tmp_path / "msg_0.db"
-    broken_db = tmp_path / "msg_1_missing.db"
-    hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(
-        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(good_db, MSG_TABLE), (broken_db, MSG_TABLE_2)]
-    )
-
-    fdir = msg_root / "file" / "2026-11"
-    fdir.mkdir(parents=True)
-    (fdir / "safe.pdf").write_bytes(b"%PDF-safe")
-
-    hl = _make_hardlink_db(hl_db)
-    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    _add_file_link(hl, "bb01" * 8, "safe.pdf")
-    hl.commit()
-    hl.close()
-
-    m1 = _make_msg_db(good_db)
-    _add_msg(m1, 42, 49, 1794285100, _file_xml("bb01" * 8))
-    m1.commit()
-    m1.close()
-
-    dest = tmp_path / "out"
-    dest.mkdir()
-    code, out = _run_download(tmp_path, 42, "wxid_alice", dest, capsys)
-    assert code == 1
-    assert "--time" in out["error"]
-    assert len(out["failures"]) == 1
-    assert list(dest.iterdir()) == []
-
-
-def test_download_unreadable_shard_resolves_with_time(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    good_db = tmp_path / "msg_0.db"
-    broken_db = tmp_path / "msg_1_missing.db"
-    hl_db = tmp_path / "hardlink.db"
-    _, msg_root = _setup_wechat_env(
-        monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(good_db, MSG_TABLE), (broken_db, MSG_TABLE_2)]
-    )
-
-    fdir = msg_root / "file" / "2026-11"
-    fdir.mkdir(parents=True)
-    (fdir / "safe.pdf").write_bytes(b"%PDF-safe")
-
-    hl = _make_hardlink_db(hl_db)
-    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
-    _add_file_link(hl, "bb01" * 8, "safe.pdf")
-    hl.commit()
-    hl.close()
-
-    ts = 1794285100
-    m1 = _make_msg_db(good_db)
-    _add_msg(m1, 42, 49, ts, _file_xml("bb01" * 8))
-    m1.commit()
-    m1.close()
-
-    dest = tmp_path / "out"
-    dest.mkdir()
-    code, out = _run_download(tmp_path, 42, "wxid_alice", dest, capsys, msg_time=_iso(ts))
-    assert code == 0
-    assert out["items"][0]["name"] == "safe.pdf"
-    assert len(out["failures"]) == 1
-    assert (dest / "safe.pdf").read_bytes() == b"%PDF-safe"

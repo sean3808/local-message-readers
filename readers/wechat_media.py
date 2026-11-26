@@ -207,7 +207,7 @@ def _resolve_group(
         try:
             digest, header = _hash_file(path)
         except OSError:
-            continue
+            return _item(kind, "not_found", REASON_FILE_MISSING)
         if is_image:
             detected_ext = _detect_image_suffix(header)
             if detected_ext is None:

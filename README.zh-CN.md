@@ -65,7 +65,7 @@ uv run wechat-reader recent --since "2026-01-01 09:00:00"
 uv run wechat-reader download <message-id> --conversation <会话> --to <目标文件夹> --time <时间>
 ```
 
-`download` 会把本地缓存的文件、视频／缩略图和明文图片安全复制到 `<目标文件夹>`，不覆盖已有文件（必要时加上 ` (1)` 后缀）。微信 4.x 加密的 `.dat` 图片会报告 `encrypted_unsupported` 且不会复制。请从 `messages`、`search` 或 `recent` 输出中同一条消息获取 `<message-id>`（`id`）与 `<时间>`（`time`）（`local_id` 会在各个分片数据库重新起算，因此 `--time` 是标准用法；如果省略且有多条消息共用同一个 `id`，会返回错误与 `alternatives`）。
+`download` 会把本地缓存的文件、视频／缩略图和明文图片安全复制到 `<目标文件夹>`（必须位于微信账号文件夹之外），不覆盖已有文件（必要时加上 ` (1)` 后缀），并在输出中附带 `time` 与 `timestamp` 供核对命中消息。微信 4.x 加密的 `.dat` 图片会报告 `encrypted_unsupported` 且不会复制。请从 `messages`、`search` 或 `recent` 输出中同一条消息获取 `<message-id>`（`id`）与 `<时间>`（`time`）（`local_id` 会在各个分片数据库重新起算，因此 `--time` 是标准用法；如果省略且有多条消息共用同一个 `id`，会返回错误与 `alternatives`）。
 
 reader 不会记住已经给你看过什么；`recent` 的 `--since` 时间由调用方自己记录。最稳妥的做法是把上次读到最后一条消息的 `time` 原样传回去：它带着时差，电脑换了时区也仍然指向同一个时刻。没写时差的时间会当作这台电脑的本地时间。公众号（订阅号、服务号）不会出现在 `conversations`、`search` 和 `recent` 的结果里。若想在 `recent` 跳过噪杂会话（例如游戏群），可在 `settings.toml` 的 `wechat_exclude_conversations` 填入会话 ID；排除会在 `--limit` 之前执行，并以 `excluded_messages` 报告整个时间范围内被排除的消息数（`conversations`、`messages` 和 `search` 仍会返回这些会话）。
 
