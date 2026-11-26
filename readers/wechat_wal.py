@@ -20,6 +20,7 @@ WAL_FRAME_HEADER_SIZE = 24
 WAL_MAGIC_LE = 0x377F0682
 WAL_MAGIC_BE = 0x377F0683
 WAL_VERSION = 3007000
+SQLITE_PENDING_BYTE = 0x40000000  # byte offset of SQLite's lock-byte page (1 GiB)
 
 
 def _wal_checksum(data: bytes, big_endian_words: bool, s0: int = 0, s1: int = 0) -> tuple[int, int]:
@@ -65,7 +66,11 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
     db_size = main_valid = len(main) // page_size
     overrides: dict[int, bytes] = {}
     pending: dict[int, bytes] = {}
-    unresolved: set[int] = set()
+    # Smallest page some commit needed but nobody supplied. Only a later shrink below it
+    # excuses it (a checkpoint may already have truncated main while the WAL still holds
+    # older commits); writing it in a later commit does not.
+    first_missing: int | None = None
+    lock_page = SQLITE_PENDING_BYTE // page_size + 1  # SQLite never writes this page
 
     frame_size = WAL_FRAME_HEADER_SIZE + page_size
     offset = WAL_HEADER_SIZE
@@ -92,17 +97,21 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
                 main_valid = min(main_valid, commit_size)
                 for stale in [p for p in overrides if p > commit_size]:
                     del overrides[stale]
-            # A page this commit needs but nobody supplies is excused only if a later commit
-            # truncates it away (a checkpoint may already have shrunk main while the WAL still
-            # holds older commits); writing it in a later commit does not excuse it.
-            unresolved = {p for p in unresolved if p <= commit_size}
-            unresolved.update(p for p in range(main_valid + 1, commit_size + 1) if p not in overrides)
+            if first_missing is not None and first_missing > commit_size:
+                first_missing = None
+            if first_missing is None:
+                # Only pages this commit grows into are new requirements. The scan stops at the
+                # first gap, so it costs at most one step per WAL page, never per claimed page.
+                for p in range(db_size + 1, commit_size + 1):
+                    if p != lock_page and p not in overrides:
+                        first_missing = p
+                        break
             db_size = commit_size
 
         offset += frame_size
 
-    if unresolved:
-        raise ValueError(f"Committed WAL references missing page {min(unresolved)}")
+    if first_missing is not None:
+        raise ValueError(f"Committed WAL references missing page {first_missing}")
 
     out = bytearray(main[: main_valid * page_size])
     out.extend(bytes((db_size - main_valid) * page_size))

@@ -183,6 +183,25 @@ def test_merge_committed_pages_rejects_missing_page_filled_by_later_commit() -> 
         merge_committed_pages(main, wal)
 
 
+def test_merge_committed_pages_rejects_absurd_commit_size_without_exhausting_memory() -> None:
+    main = _page(1)
+    wal = _build_wal([(1, 0xFFFFFFFE, _page(10), None)])
+    with pytest.raises(ValueError, match="missing page 2"):
+        merge_committed_pages(main, wal)
+
+
+def test_merge_committed_pages_skips_sqlite_lock_byte_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    # SQLite never writes the page holding the lock byte (byte offset 1 GiB in real files);
+    # pretend it sits at page 3 so growth across it stays small enough for a unit test.
+    import readers.wechat_wal as wal_module
+
+    monkeypatch.setattr(wal_module, "SQLITE_PENDING_BYTE", 2 * PAGE_SIZE)
+    main = _page(1) + _page(2)
+    wal = _build_wal([(4, 4, _page(40), None)])
+    merged = merge_committed_pages(main, wal)
+    assert merged == _page(1) + _page(2) + bytes(PAGE_SIZE) + _page(40)
+
+
 def _xor_bytes(data: bytes, key: int = 0x5A) -> bytes:
     return bytes(b ^ key for b in data)
 
