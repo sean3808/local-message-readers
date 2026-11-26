@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import struct
 import sys
 from pathlib import Path
@@ -75,6 +76,13 @@ def test_merge_committed_pages_applies_committed_and_drops_uncommitted(magic: in
 def test_merge_committed_pages_empty_wal_returns_main() -> None:
     main = _page(1) + _page(2)
     assert merge_committed_pages(main, b"") == main
+
+
+@pytest.mark.parametrize("wal", [b"", None])
+def test_merge_committed_pages_rejects_unaligned_main_with_or_without_wal(wal: bytes | None) -> None:
+    wal_bytes = _build_wal([(1, 1, _page(10), None)]) if wal is None else wal
+    with pytest.raises(ValueError, match="multiple of page size"):
+        merge_committed_pages(_page(1) + b"x", wal_bytes)
 
 
 def test_merge_committed_pages_stops_at_salt_mismatch() -> None:
@@ -152,33 +160,29 @@ def _xor_bytes(data: bytes, key: int = 0x5A) -> bytes:
 
 
 def _recompute_wal_with_xor(wal: bytes, key: int = 0x5A) -> bytes:
-    magic, _version, page_size, _ckpt, salt1, salt2, _c1, _c2 = struct.unpack(">IIIIIIII", wal[:32])
-    big_endian_words = magic == WAL_MAGIC_BE
-    out = bytearray(wal[:32])
-    s0, s1 = _wal_checksum(bytes(out[:24]), big_endian_words)
-    struct.pack_into(">II", out, 24, s0, s1)
-
+    """Re-encode a real WAL as an encrypting writer would: XOR each payload, rebuild the checksum chain."""
+    magic, version, page_size, ckpt, salt1, salt2, _c1, _c2 = struct.unpack(">IIIIIIII", wal[:32])
     frame_size = 24 + page_size
+    frames = []
     offset = 32
     while offset + frame_size <= len(wal):
-        frame_hdr = bytearray(wal[offset : offset + 24])
-        f_salt1, f_salt2 = struct.unpack(">II", frame_hdr[8:16])
+        pgno, commit_size, f_salt1, f_salt2 = struct.unpack(">IIII", wal[offset : offset + 16])
         if (f_salt1, f_salt2) != (salt1, salt2):
-            out.extend(wal[offset:])
             break
-        enc_payload = _xor_bytes(wal[offset + 24 : offset + frame_size], key)
-        s0, s1 = _wal_checksum(bytes(frame_hdr[:8]), big_endian_words, s0, s1)
-        s0, s1 = _wal_checksum(enc_payload, big_endian_words, s0, s1)
-        struct.pack_into(">II", frame_hdr, 16, s0, s1)
-        out.extend(frame_hdr)
-        out.extend(enc_payload)
+        frames.append((pgno, commit_size, _xor_bytes(wal[offset + 24 : offset + frame_size], key), None))
         offset += frame_size
-    return bytes(out)
+    return _build_wal(
+        frames,
+        magic=magic,
+        version=version,
+        page_size=page_size,
+        checkpoint_seq=ckpt,
+        salt=(salt1, salt2),
+        trailing_bytes=wal[offset:],
+    )
 
 
 def test_real_sqlite_wal_with_reversible_page_cipher(tmp_path: Path) -> None:
-    import sqlite3
-
     db_path = tmp_path / "real.db"
     wal_path = tmp_path / "real.db-wal"
 

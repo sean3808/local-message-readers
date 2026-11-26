@@ -422,7 +422,6 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
         stats = {p: p.stat() for p in files}
         return {p: (st.st_size, st.st_mtime_ns) for p, st in stats.items()}, sorted(db_files), folders
 
-    copied_count = 0
     for _attempt in range(2):
         before, db_files, folders = inventory()
         if destination.exists():
@@ -434,7 +433,6 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         if (before, db_files, folders) == inventory():
-            copied_count = len(before)
             break
     else:
         raise RuntimeError("WeChat files changed during both copy attempts")
@@ -444,7 +442,7 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(read_snapshot(db_path))
 
-    return copied_count + len(db_files), folders
+    return len(before) + len(db_files), folders
 
 
 BACKUP_NAME_RE = re.compile(r"^teams-archive-(\d{8}-\d{6})\.7z$")
