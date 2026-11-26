@@ -20,6 +20,7 @@ REASON_FILE_MISSING = "file_missing"
 REASON_SOURCE_CHANGED = "source_changed_during_copy"
 REASON_SYMLINK_REJECTED = "symlink_rejected"
 REASON_PATH_OUTSIDE_MSG_ROOT = "path_outside_msg_root"
+REASON_DIR2ID_UNRESOLVED = "dir2id_unresolved"
 REASON_MULTIPLE_DISTINCT_FILES = "multiple_distinct_files"
 REASON_ENCRYPTED_IMAGE = "encrypted_or_unrecognized_image"
 REASON_UNSUPPORTED_MESSAGE_TYPE = "unsupported_message_type"
@@ -76,11 +77,10 @@ def _validate_candidate_path(msg_root: str, parts: list[str]) -> tuple[str | Non
         if not _is_safe_component(part):
             return None, REASON_PATH_OUTSIDE_MSG_ROOT
     candidate = os.path.join(msg_root, *parts)
-    if not _is_inside_root(candidate, msg_root):
-        return None, REASON_PATH_OUTSIDE_MSG_ROOT
 
     cur = msg_root
-    for idx, part in enumerate(parts):
+    last_st: os.stat_result | None = None
+    for part in parts:
         cur = os.path.join(cur, part)
         try:
             st = os.lstat(cur)
@@ -90,9 +90,12 @@ def _validate_candidate_path(msg_root: str, parts: list[str]) -> tuple[str | Non
             return None, REASON_FILE_MISSING
         if _is_reparse_or_symlink(st):
             return None, REASON_SYMLINK_REJECTED
-        is_last = idx == len(parts) - 1
-        if is_last and not stat.S_ISREG(st.st_mode):
-            return None, REASON_FILE_MISSING
+        last_st = st
+
+    if not _is_inside_root(candidate, msg_root):
+        return None, REASON_PATH_OUTSIDE_MSG_ROOT
+    if last_st is None or not stat.S_ISREG(last_st.st_mode):
+        return None, REASON_FILE_MISSING
     return candidate, None
 
 
@@ -169,7 +172,7 @@ def _copy_verified(kind: str, src_path: str, dest_dir: str, dest_name: str, expe
 
 def _resolve_group(
     kind: str,
-    candidate_specs: list[tuple[list[str], str]],
+    candidate_specs: list[tuple[list[str] | None, str]],
     msg_root: str,
     dest_dir: str,
     *,
@@ -180,16 +183,25 @@ def _resolve_group(
 
     security_errors: list[str] = []
     valid_files: list[tuple[str, str]] = []
+    had_dir2id_miss = False
+    had_file_missing = False
     for rel_parts, raw_name in candidate_specs:
+        if rel_parts is None:
+            had_dir2id_miss = True
+            continue
         path, err = _validate_candidate_path(msg_root, rel_parts)
         if path is not None:
             valid_files.append((path, raw_name))
         elif err in (REASON_SYMLINK_REJECTED, REASON_PATH_OUTSIDE_MSG_ROOT):
             security_errors.append(err)
+        else:
+            had_file_missing = True
 
     if not valid_files:
         if security_errors:
             return _item(kind, "not_found", security_errors[0])
+        if had_dir2id_miss and not had_file_missing:
+            return _item(kind, "not_found", REASON_DIR2ID_UNRESOLVED)
         return _item(kind, "not_found", REASON_FILE_MISSING)
 
     hashed: list[tuple[str, str, str]] = []
@@ -322,10 +334,10 @@ def resolve_and_download_media(
         if isinstance(res, str):
             return [_item("file", "not_found", res)]
         dir_map, rows = res
-        specs: list[tuple[list[str], str]] = []
+        specs: list[tuple[list[str] | None, str]] = []
         for row_type, file_name, dir1, dir2 in rows:
             dir_name = dir_map.get(dir1) if row_type == 1 else dir_map.get(dir2) if row_type == 6 else None
-            specs.append((["file", dir_name, file_name] if dir_name is not None else [""], file_name))
+            specs.append((["file", dir_name, file_name] if dir_name is not None else None, file_name))
         return [_resolve_group("file", specs, msg_root, dest_dir)]
 
     if base_type == 43:
@@ -349,11 +361,11 @@ def resolve_and_download_media(
         if not rows:
             return [_item("video", "not_found", REASON_NO_HARDLINK_ROW)]
 
-        video_specs: list[tuple[list[str], str]] = []
-        thumb_specs: list[tuple[list[str], str]] = []
+        video_specs: list[tuple[list[str] | None, str]] = []
+        thumb_specs: list[tuple[list[str] | None, str]] = []
         for _, file_name, dir1, _ in rows:
             dir_name = dir_map.get(dir1)
-            rel = ["video", dir_name, file_name] if dir_name is not None else [""]
+            rel = ["video", dir_name, file_name] if dir_name is not None else None
             if isinstance(file_name, str) and file_name.lower().endswith(".jpg"):
                 thumb_specs.append((rel, file_name))
             else:
@@ -384,5 +396,5 @@ def resolve_and_download_media(
     specs = []
     for _, file_name, dir1, dir2 in rows:
         d1, d2 = dir_map.get(dir1), dir_map.get(dir2)
-        specs.append((["attach", d1, d2, "Img", file_name] if d1 is not None and d2 is not None else [""], file_name))
+        specs.append((["attach", d1, d2, "Img", file_name] if d1 is not None and d2 is not None else None, file_name))
     return [_resolve_group("image", specs, msg_root, dest_dir, is_image=True)]

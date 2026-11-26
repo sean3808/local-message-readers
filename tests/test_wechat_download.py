@@ -614,7 +614,7 @@ def test_download_unsupported_and_group_prefix_xml(
     assert out_ok["items"][0]["name"] == "group_doc.txt"
 
 
-def test_download_path_traversal_and_symlink_rejected(
+def test_download_path_traversal_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     msg_db = tmp_path / "msg_0.db"
@@ -640,6 +640,7 @@ def test_download_path_traversal_and_symlink_rejected(
         ("8882" * 8, 1, "secret.txt", 2, 0),
     )
     hl.commit()
+    hl.close()
 
     mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
     mconn.execute(
@@ -651,6 +652,7 @@ def test_download_path_traversal_and_symlink_rejected(
         (802, 49, 1794285200, 1, f"<msg><appmsg><type>6</type><md5>{'8882' * 8}</md5></appmsg></msg>", 0),
     )
     mconn.commit()
+    mconn.close()
 
     dest = tmp_path / "out"
     dest.mkdir()
@@ -662,22 +664,37 @@ def test_download_path_traversal_and_symlink_rejected(
     c2, o2 = _run_download(tmp_path, 802, "wxid_alice", dest, capsys)
     assert c2 == 1
     assert o2["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_PATH_OUTSIDE_MSG_ROOT}]
+    assert list(dest.iterdir()) == []
 
-    # Symlink test (skip if OS refuses symlink creation)
+
+def test_download_symlink_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = tmp_path / "msg_0.db"
+    hl_db = tmp_path / "hardlink.db"
+    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+
+    outside_file = account_root / "secret.txt"
+    outside_file.write_bytes(b"secret")
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
     sym_path = fdir / "link.txt"
     try:
         os.symlink(outside_file, sym_path)
     except (OSError, NotImplementedError) as exc:
-        hl.close()
-        mconn.close()
         pytest.skip(f"OS refused symlink creation: {exc}")
 
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
     hl.execute(
         "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
         ("8883" * 8, 1, "link.txt", 1, 0),
     )
     hl.commit()
     hl.close()
+
+    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
     mconn.execute(
         "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
         (803, 49, 1794285300, 1, f"<msg><appmsg><type>6</type><md5>{'8883' * 8}</md5></appmsg></msg>", 0),
@@ -685,9 +702,91 @@ def test_download_path_traversal_and_symlink_rejected(
     mconn.commit()
     mconn.close()
 
+    dest = tmp_path / "out"
+    dest.mkdir()
     c3, o3 = _run_download(tmp_path, 803, "wxid_alice", dest, capsys)
     assert c3 == 1
     assert o3["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_SYMLINK_REJECTED}]
+    assert list(dest.iterdir()) == []
+
+
+def test_download_junction_reparse_point_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    try:
+        import _winapi
+        create_junction = _winapi.CreateJunction
+    except (ImportError, AttributeError) as exc:
+        pytest.skip(f"_winapi.CreateJunction unavailable: {exc}")
+
+    msg_db = tmp_path / "msg_0.db"
+    hl_db = tmp_path / "hardlink.db"
+    account_root, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+
+    target_dir = account_root / "outside_dir"
+    target_dir.mkdir()
+    (target_dir / "payload.txt").write_bytes(b"junction target")
+
+    file_root = msg_root / "file"
+    file_root.mkdir(parents=True)
+    junction_dir = file_root / "2026-11"
+    create_junction(str(target_dir), str(junction_dir))
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("8884" * 8, 1, "payload.txt", 1, 0),
+    )
+    hl.commit()
+    hl.close()
+
+    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
+    mconn.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (804, 49, 1794285400, 1, f"<msg><appmsg><type>6</type><md5>{'8884' * 8}</md5></appmsg></msg>", 0),
+    )
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 804, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert out["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_SYMLINK_REJECTED}]
+    assert list(dest.iterdir()) == []
+
+
+def test_download_dir2id_unresolved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = tmp_path / "msg_0.db"
+    hl_db = tmp_path / "hardlink.db"
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+
+    hl = _make_hardlink_db(hl_db)
+    # dir1=99 does not exist in dir2id
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("8885" * 8, 1, "orphan.pdf", 99, 0),
+    )
+    hl.commit()
+    hl.close()
+
+    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
+    mconn.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (805, 49, 1794285500, 1, f"<msg><appmsg><type>6</type><md5>{'8885' * 8}</md5></appmsg></msg>", 0),
+    )
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 805, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert out["items"] == [{"kind": "file", "status": "not_found", "reason": wechat_media.REASON_DIR2ID_UNRESOLVED}]
+    assert list(dest.iterdir()) == []
 
 
 def test_download_source_changed_mid_copy_and_no_overwrite(
