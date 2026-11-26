@@ -36,6 +36,7 @@ from wechat_cli.core.messages import (
 from readers.settings import SETTINGS_HELP, get_setting
 from readers.settings import configure as configure_settings
 from readers.timeparse import FORMATS_HELP, parse_time_range
+from readers.wechat_media import resolve_and_download_media
 
 TEMP_PREFIX = "wechat-reader-"
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
@@ -297,6 +298,63 @@ def recent(app, since, limit, exclude_conversations=None):
     }
 
 
+def download_media(app, message_id, conversation, dest_dir):
+    if not os.path.isdir(dest_dir):
+        raise ValueError(f"Destination is not an existing directory: {dest_dir}")
+    ctx = _resolve(app, conversation)
+    matches = []
+    failures = []
+    for tc in _iter_table_contexts(ctx):
+        table_name = tc["table_name"]
+        if not _is_safe_msg_table_name(table_name):
+            raise ValueError(f"Invalid message table name: {table_name}")
+        try:
+            with closing(sqlite3.connect(tc["db_path"])) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT local_id, local_type, create_time, real_sender_id, message_content, WCDB_CT_message_content
+                    FROM [{table_name}] WHERE local_id = ?
+                    """,
+                    (message_id,),
+                ).fetchall()
+                matches.extend((row, tc) for row in rows)
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"{tc['username']}: {e}")
+
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous message id {message_id}: found {len(matches)} matching messages")
+    if not matches:
+        raise ValueError(f"Message not found: {message_id}")
+
+    row, tc = matches[0]
+    _, local_type, _, _, raw_content, ct = row
+    content = decompress_content(raw_content, ct)
+
+    try:
+        hardlink_db_path = app.cache.get(os.path.join("hardlink", "hardlink.db"))
+    except Exception:  # noqa: BLE001
+        hardlink_db_path = None
+
+    msg_root = os.path.join(os.path.dirname(app.db_dir), "msg")
+    items = resolve_and_download_media(
+        hardlink_db_path,
+        msg_root,
+        local_type,
+        content,
+        dest_dir,
+        is_group=tc["is_group"],
+    )
+    result = {
+        "conversation": _conversation(ctx),
+        "message_id": message_id,
+        "message_type": format_msg_type(local_type),
+        "items": items,
+        "failures": failures,
+    }
+    code = 0 if any(item["status"] == "resolved" for item in items) else 1
+    return result, code
+
+
 def _parser():
     p = argparse.ArgumentParser(prog="wechat-reader", description="Read the local WeChat read-only; JSON output to stdout")
     p.add_argument("--settings", default=None, help=SETTINGS_HELP)
@@ -322,23 +380,31 @@ def _parser():
     r = sub.add_parser("recent", help="Messages after a given time across all conversations (oldest to newest)")
     r.add_argument("--since", required=True, help=f"The time last read up to: {FORMATS_HELP}; passing back the last message's `time` is immune to time zone changes. Boundary included, dedupe by (conversation_id, id)")
     r.add_argument("--limit", type=int, default=100)
+
+    d = sub.add_parser("download", help="Resolve and safely copy locally cached media/attachments for a message")
+    d.add_argument("message_id", type=int, metavar="message-id", help="Message integer local_id as reported by messages")
+    d.add_argument("--conversation", required=True, help="Display name, remark name or id (such as wxid_xxx, xxx@chatroom)")
+    d.add_argument("--to", required=True, dest="to_dir", help="Existing destination directory")
     return p
 
 
 def _run(args):
-    validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
+    if hasattr(args, "limit"):
+        validate_pagination(args.limit, getattr(args, "offset", 0), limit_max=None)
     if args.cmd == "search":
         if any(not kw.strip() for kw in args.keywords):
             raise ValueError("Search keyword must not be blank")
     app = AppContext()
     if args.cmd == "conversations":
-        return list_conversations(app, args.limit)
+        return list_conversations(app, args.limit), 0
     if args.cmd == "messages":
-        return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end)
+        return get_messages(app, args.conversation, args.limit, args.offset, args.start, args.end), 0
     if args.cmd == "recent":
         excluded = get_setting("wechat_exclude_conversations") or []
-        return recent(app, args.since, args.limit, exclude_conversations=excluded)
-    return search(app, args.keywords, args.conversation, args.limit, args.start, args.end)
+        return recent(app, args.since, args.limit, exclude_conversations=excluded), 0
+    if args.cmd == "download":
+        return download_media(app, args.message_id, args.conversation, args.to_dir)
+    return search(app, args.keywords, args.conversation, args.limit, args.start, args.end), 0
 
 
 def main(argv=None):
@@ -350,7 +416,7 @@ def main(argv=None):
     DBCache.MTIME_FILE = os.path.join(cache_dir, "_mtimes.json")
     try:
         configure_settings(args.settings)
-        result, code = _run(args), 0
+        result, code = _run(args)
     except Exception as e:  # noqa: BLE001 — any failure is reported to the Local Agent as JSON
         result, code = {"error": str(e)}, 1
     finally:

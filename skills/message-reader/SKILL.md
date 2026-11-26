@@ -35,7 +35,9 @@ Date parameter format: `--start 2026-01-01`, `--since "2026-01-01 09:00:00"` (ma
 
 **Freshness**: the reader only reads data WeChat has already written on this computer. When the user wants "latest / today / after some time", first ask whether the desktop app was logged in during that period and synced with the phone; for old history, just proceed.
 
-**Content the reader does not provide** (report "not provided by the reader"): some call states (an unanswered call appears only as a bare call tag), and image content (only a `local_id`). A quoted reply has its `type` labelled as link/file, but the body text and the quote line that starts with `↳` themselves are correct.
+**Media and attachments**: export locally cached files, videos/thumbnails, and plaintext images with `wechat-reader download <message-id> --conversation <conversation> --to <folder>`. Check each item's `status` and `reason` in the JSON: encrypted WeChat 4.x `.dat` images report `encrypted_unsupported` (no bytes are written to `<folder>`), and missing or ambiguous cache files report `not_found` or `ambiguous`.
+
+**Content the reader does not provide** (report "not provided by the reader"): some call states (an unanswered call appears only as a bare call tag), and encrypted WeChat 4.x `.dat` image contents (`download` reports `encrypted_unsupported`). A quoted reply has its `type` labelled as link/file, but the body text and the quote line that starts with `↳` themselves are correct.
 
 ## Teams
 

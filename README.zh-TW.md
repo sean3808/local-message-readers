@@ -16,7 +16,7 @@ Teams 的快取只保留最近一段時間的訊息，所以 `teams-reader` 另�
 - **只讀不寫。** 沒有任何發送、修改或刪除訊息的功能。
 - **Teams 只支援個人版帳號。** 公司或學校的工作帳號訊息讀不到。
 - **只讀得到這台電腦上已有的資料。** 桌面版軟體關著或登出的期間，那段時間的訊息不會自動補回；請先在手機與桌面版之間同步聊天記錄。reader 無法判斷資料是否完整，重要時請拿最新一則訊息跟手機對照。
-- **不支援：** 部分 WeChat 通話狀態，以及圖片內容（只回傳識別碼）。
+- **不支援：** 部分 WeChat 通話狀態，以及 WeChat 4.x 加密的 `.dat` 圖片（`wechat-reader download` 會回報 `encrypted_unsupported`，不會嘗試解密）。
 
 ## 安裝（給非開發者）
 
@@ -62,7 +62,10 @@ uv run wechat-cli init --db-dir "$env:USERPROFILE\Documents\xwechat_files\<你�
 ```powershell
 uv run wechat-reader conversations
 uv run wechat-reader recent --since "2026-01-01 09:00:00"
+uv run wechat-reader download <message-id> --conversation <對話> --to <目的資料夾>
 ```
+
+`download` 會把本機快取的檔案、影片／縮圖與明文圖片安全複製到 `<目的資料夾>`，不覆寫既有檔案（必要時加上 ` (1)` 後綴）。WeChat 4.x 加密的 `.dat` 圖片會回報 `encrypted_unsupported` 且不會複製。
 
 reader 不會記得已經給你看過什麼；`recent` 的 `--since` 時間由呼叫的人自己記。最穩的做法是把上次讀到最後一則訊息的 `time` 原樣傳回去：它帶著時差，電腦換了時區也還是指向同一個時刻。沒寫時差的時間會當成這台電腦的當地時間。公眾號（訂閱號、服務號）不會出現在 `conversations`、`search` 與 `recent` 的結果裡。若想在 `recent` 略過雜訊對話（例如遊戲群組），可在 `settings.toml` 的 `wechat_exclude_conversations` 填入對話 ID；排除會在 `--limit` 之前執行，並以 `excluded_messages` 回報整個時間範圍內被排除的訊息數（`conversations`、`messages` 與 `search` 仍會回傳這些對話）。
 
