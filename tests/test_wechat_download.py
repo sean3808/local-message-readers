@@ -1080,3 +1080,64 @@ def test_download_sharded_local_id_disambiguated_by_time_and_deduped(
     assert c_tie == 1
     assert "same time" in o_tie["error"]
     assert [a["timestamp"] for a in o_tie["alternatives"]] == [ts_tie, ts_tie]
+
+
+def test_download_unreadable_shard_fails_closed_without_time_and_resolves_with_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from datetime import datetime
+
+    good_db = tmp_path / "msg_0.db"
+    broken_db = tmp_path / "msg_1_missing.db"
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[
+            (good_db, "Msg_11111111111111111111111111111111"),
+            (broken_db, "Msg_22222222222222222222222222222222"),
+        ],
+    )
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "safe.pdf").write_bytes(b"%PDF-safe")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    hl.execute(
+        "INSERT INTO file_hardlink_info_v4 (md5, type, file_name, dir1, dir2) VALUES (?, ?, ?, ?, ?)",
+        ("bb01" * 8, 1, "safe.pdf", 1, 0),
+    )
+    hl.commit()
+    hl.close()
+
+    ts = 1794285100
+    m1 = _make_msg_db(good_db, "Msg_11111111111111111111111111111111")
+    m1.execute(
+        "INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)",
+        (42, 49, ts, 1, f"<msg><appmsg><type>6</type><md5>{'bb01' * 8}</md5></appmsg></msg>", 0),
+    )
+    m1.commit()
+    m1.close()
+    # broken_db intentionally has no Msg_22222222222222222222222222222222 table -> sqlite3.OperationalError
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    # Without --time: must fail closed and write nothing
+    c_no_time, o_no_time = _run_download(tmp_path, 42, "wxid_alice", dest, capsys)
+    assert c_no_time == 1
+    assert "error" in o_no_time
+    assert "--time" in o_no_time["error"]
+    assert len(o_no_time["failures"]) == 1
+    assert list(dest.iterdir()) == []
+
+    # With --time: resolves the matching row and reports the shard failure in failures
+    iso = datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
+    c_with_time, o_with_time = _run_download(tmp_path, 42, "wxid_alice", dest, capsys, msg_time=iso)
+    assert c_with_time == 0
+    assert o_with_time["items"][0]["name"] == "safe.pdf"
+    assert len(o_with_time["failures"]) == 1
+    assert (dest / "safe.pdf").read_bytes() == b"%PDF-safe"

@@ -332,6 +332,12 @@ def download_media(app, message_id, conversation, dest_dir, time_str=""):
         except Exception as e:  # noqa: BLE001
             failures.append(f"{tc['username']}: {e}")
 
+    if failures and target_ts is None:
+        return {
+            "error": f"message id {message_id} could not be checked in every message database; retry with --time or fix the failures",
+            "failures": failures,
+        }, 1
+
     if target_ts is not None:
         matches = [(row, tc) for row, tc in matches if int(row[2]) == target_ts]
 
