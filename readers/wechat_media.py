@@ -25,6 +25,7 @@ REASON_ENCRYPTED_IMAGE = "encrypted_or_unrecognized_image"
 REASON_UNSUPPORTED_MESSAGE_TYPE = "unsupported_message_type"
 REASON_MALFORMED_XML = "malformed_message_xml"
 
+_XML_LEAD_JUNK = "\ufeff \t\r\n"
 _REPARSE_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _CHUNK_SIZE = 1024 * 1024
 
@@ -254,8 +255,8 @@ def _query_hardlink_rows(conn: sqlite3.Connection, table: str, md5_list: list[st
 def _parse_message_xml(content: str | bytes | None, local_type: int, is_group: bool):
     if content is None or isinstance(content, bytes):
         return None, REASON_UNSUPPORTED_MESSAGE_TYPE
-    if content.lstrip().startswith("<"):
-        body = content
+    if content.lstrip(_XML_LEAD_JUNK).startswith("<"):
+        body = content.lstrip(_XML_LEAD_JUNK)
     else:
         _, body = _parse_message_content(content, local_type, is_group)
     root = _parse_xml_root(body.strip())

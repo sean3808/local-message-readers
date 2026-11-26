@@ -730,8 +730,9 @@ def test_download_unsupported_and_group_prefix_xml(
     assert out_ok["items"][0]["name"] == "group_doc.txt"
 
 
+@pytest.mark.parametrize("lead", ["", "\ufeff", " \ufeff\n"])
 def test_download_group_xml_without_prefix_containing_colon_newline(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], lead: str
 ) -> None:
     msg_db = _shard_db_path(tmp_path, 0)
     hl_db = tmp_path / "hardlink.db"
@@ -749,7 +750,7 @@ def test_download_group_xml_without_prefix_containing_colon_newline(
     hl.commit()
     hl.close()
 
-    xml_with_colon_nl = f"<msg><appmsg><type>6</type><des>note:\nline2</des><md5>{'7778' * 8}</md5></appmsg></msg>"
+    xml_with_colon_nl = f"{lead}<msg><appmsg><type>6</type><des>note:\nline2</des><md5>{'7778' * 8}</md5></appmsg></msg>"
     mconn = _make_msg_db(msg_db, MSG_TABLE_GROUP)
     _add_msg(mconn, 707, 49, 1794285700, xml_with_colon_nl, table=MSG_TABLE_GROUP)
     mconn.commit()
