@@ -128,48 +128,43 @@ def _open_unique_dest(dest_dir: str, dest_name: str):
 
 def _copy_verified(kind: str, src_path: str, dest_dir: str, dest_name: str, expected_digest: str) -> dict[str, object]:
     dest_path: str | None = None
+    committed = False
     try:
         stat_before = os.stat(src_path)
         actual_name, dest_path, dst_f = _open_unique_dest(dest_dir, dest_name)
         copy_hasher = hashlib.sha256()
         total_bytes = 0
-        try:
-            with dst_f, open(src_path, "rb") as src_f:
-                fstat_before = os.fstat(src_f.fileno())
-                while True:
-                    chunk = src_f.read(_CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    dst_f.write(chunk)
-                    copy_hasher.update(chunk)
-                    total_bytes += len(chunk)
-                fstat_after = os.fstat(src_f.fileno())
-            stat_after = os.stat(src_path)
-        except Exception:
-            if dest_path and os.path.exists(dest_path):
-                os.unlink(dest_path)
-            return _item(kind, "not_found", REASON_SOURCE_CHANGED)
+        with dst_f, open(src_path, "rb") as src_f:
+            fstat_before = os.fstat(src_f.fileno())
+            while True:
+                chunk = src_f.read(_CHUNK_SIZE)
+                if not chunk:
+                    break
+                dst_f.write(chunk)
+                copy_hasher.update(chunk)
+                total_bytes += len(chunk)
+            fstat_after = os.fstat(src_f.fileno())
+        stat_after = os.stat(src_path)
 
         stat_ok = (stat_before.st_size, stat_before.st_mtime_ns) == (stat_after.st_size, stat_after.st_mtime_ns)
         fstat_ok = (fstat_before.st_size, fstat_before.st_mtime_ns) == (fstat_after.st_size, fstat_after.st_mtime_ns)
         digest_ok = copy_hasher.hexdigest() == expected_digest
-        if not (stat_ok and fstat_ok and digest_ok):
-            if dest_path and os.path.exists(dest_path):
-                os.unlink(dest_path)
-            return _item(kind, "not_found", REASON_SOURCE_CHANGED)
-
-        return _item(
-            kind,
-            "resolved",
-            REASON_RESOLVED,
-            name=actual_name,
-            path=dest_path,
-            size=total_bytes,
-        )
-    except OSError:
-        if dest_path and os.path.exists(dest_path):
+        if stat_ok and fstat_ok and digest_ok:
+            committed = True
+            return _item(
+                kind,
+                "resolved",
+                REASON_RESOLVED,
+                name=actual_name,
+                path=dest_path,
+                size=total_bytes,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        if not committed and dest_path and os.path.exists(dest_path):
             os.unlink(dest_path)
-        return _item(kind, "not_found", REASON_SOURCE_CHANGED)
+    return _item(kind, "not_found", REASON_SOURCE_CHANGED)
 
 
 def _resolve_group(
@@ -273,6 +268,29 @@ def _find_tag(root: ET.Element, tag: str) -> ET.Element | None:
     return found if found is not None else root.find(f".//{tag}")
 
 
+def _lookup_hardlink(
+    hardlink_db_path: str | None,
+    table: str,
+    key_groups: list[list[str]],
+) -> tuple[dict[int, str], list[tuple[int, str, int, int]]] | str:
+    """Open hardlink.db read-only and query the first key group that yields rows, or return a failure reason."""
+    conn = _open_hardlink_db(hardlink_db_path)
+    if conn is None:
+        return REASON_HARDLINK_DB_UNAVAILABLE
+    try:
+        with closing(conn):
+            dir_map = _load_dir2id(conn)
+            for keys in key_groups:
+                if not keys:
+                    continue
+                rows = _query_hardlink_rows(conn, table, keys)
+                if rows:
+                    return dir_map, rows
+            return dir_map, []
+    except sqlite3.Error:
+        return REASON_HARDLINK_DB_UNAVAILABLE
+
+
 def resolve_and_download_media(
     hardlink_db_path: str | None,
     msg_root: str,
@@ -296,33 +314,24 @@ def resolve_and_download_media(
         if appmsg is None or (appmsg.findtext("type") or "").strip() != "6":
             return [_item(None, "unsupported", REASON_UNSUPPORTED_MESSAGE_TYPE)]
         file_md5 = (appmsg.findtext("md5") or "").strip().lower()
-        conn = _open_hardlink_db(hardlink_db_path)
-        if conn is None:
-            return [_item("file", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
-        try:
-            if not file_md5:
-                return [_item("file", "not_found", REASON_NO_MD5_IN_MESSAGE)]
-            with closing(conn):
-                dir_map = _load_dir2id(conn)
-                rows = _query_hardlink_rows(conn, "file_hardlink_info_v4", [file_md5])
-        except sqlite3.Error:
-            return [_item("file", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
+        if not file_md5:
+            if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
+                return [_item("file", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
+            return [_item("file", "not_found", REASON_NO_MD5_IN_MESSAGE)]
+        res = _lookup_hardlink(hardlink_db_path, "file_hardlink_info_v4", [[file_md5]])
+        if isinstance(res, str):
+            return [_item("file", "not_found", res)]
+        dir_map, rows = res
         specs: list[tuple[list[str], str]] = []
         for row_type, file_name, dir1, dir2 in rows:
             dir_name = dir_map.get(dir1) if row_type == 1 else dir_map.get(dir2) if row_type == 6 else None
-            if dir_name is not None:
-                specs.append((["file", dir_name, file_name], file_name))
-            else:
-                specs.append(([""], file_name))
+            specs.append((["file", dir_name, file_name] if dir_name is not None else [""], file_name))
         return [_resolve_group("file", specs, msg_root, dest_dir)]
 
     if base_type == 43:
         videomsg = _find_tag(root, "videomsg")
         if videomsg is None:
             return [_item(None, "unsupported", REASON_UNSUPPORTED_MESSAGE_TYPE)]
-        conn = _open_hardlink_db(hardlink_db_path)
-        if conn is None:
-            return [_item("video", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
         keys = list(dict.fromkeys(
             k for k in (
                 (videomsg.attrib.get("md5") or "").strip().lower(),
@@ -330,14 +339,13 @@ def resolve_and_download_media(
             ) if k
         ))
         if not keys:
-            conn.close()
+            if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
+                return [_item("video", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
             return [_item("video", "not_found", REASON_NO_MD5_IN_MESSAGE)]
-        try:
-            with closing(conn):
-                dir_map = _load_dir2id(conn)
-                rows = _query_hardlink_rows(conn, "video_hardlink_info_v4", keys)
-        except sqlite3.Error:
-            return [_item("video", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
+        res = _lookup_hardlink(hardlink_db_path, "video_hardlink_info_v4", [keys])
+        if isinstance(res, str):
+            return [_item("video", "not_found", res)]
+        dir_map, rows = res
         if not rows:
             return [_item("video", "not_found", REASON_NO_HARDLINK_ROW)]
 
@@ -362,27 +370,19 @@ def resolve_and_download_media(
     img = _find_tag(root, "img")
     if img is None:
         return [_item(None, "unsupported", REASON_UNSUPPORTED_MESSAGE_TYPE)]
-    conn = _open_hardlink_db(hardlink_db_path)
-    if conn is None:
-        return [_item("image", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
     img_md5 = (img.attrib.get("md5") or "").strip().lower()
     origin_md5 = (img.attrib.get("originsourcemd5") or "").strip().lower()
     if not img_md5 and not origin_md5:
-        conn.close()
+        if not hardlink_db_path or not os.path.isfile(hardlink_db_path):
+            return [_item("image", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
         return [_item("image", "not_found", REASON_NO_MD5_IN_MESSAGE)]
-    try:
-        with closing(conn):
-            dir_map = _load_dir2id(conn)
-            rows = _query_hardlink_rows(conn, "image_hardlink_info_v4", [img_md5]) if img_md5 else []
-            if not rows and origin_md5:
-                rows = _query_hardlink_rows(conn, "image_hardlink_info_v4", [origin_md5])
-    except sqlite3.Error:
-        return [_item("image", "not_found", REASON_HARDLINK_DB_UNAVAILABLE)]
+    key_groups = [g for g in ([img_md5] if img_md5 else [], [origin_md5] if origin_md5 else []) if g]
+    res = _lookup_hardlink(hardlink_db_path, "image_hardlink_info_v4", key_groups)
+    if isinstance(res, str):
+        return [_item("image", "not_found", res)]
+    dir_map, rows = res
     specs = []
     for _, file_name, dir1, dir2 in rows:
         d1, d2 = dir_map.get(dir1), dir_map.get(dir2)
-        if d1 is not None and d2 is not None:
-            specs.append((["attach", d1, d2, "Img", file_name], file_name))
-        else:
-            specs.append(([""], file_name))
+        specs.append((["attach", d1, d2, "Img", file_name] if d1 is not None and d2 is not None else [""], file_name))
     return [_resolve_group("image", specs, msg_root, dest_dir, is_image=True)]

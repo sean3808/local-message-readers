@@ -831,3 +831,25 @@ def test_download_temp_dir_deleted_after_main(
     assert code == 1
     assert len(created_dirs) == 1
     assert not Path(created_dirs[0]).exists()
+
+
+def test_existing_messages_subcommand_json_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = tmp_path / "msg_0.db"
+    mconn = _make_msg_db(msg_db, "Msg_11111111111111111111111111111111")
+    mconn.execute("INSERT INTO Msg_11111111111111111111111111111111 VALUES (?, ?, ?, ?, ?, ?)", (1, 1, 1794285100, 1, "hello", 0))
+    mconn.commit()
+    mconn.close()
+
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, "Msg_11111111111111111111111111111111")])
+    code = wechat.main([*settings_args(tmp_path), "messages", "wxid_alice", "--limit", "10"])
+    assert code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert set(out.keys()) == {"conversation", "truncated", "messages", "failures"}
+    assert out["conversation"] == {"id": "wxid_alice", "name": "Alice Example", "is_group": False}
+    assert out["truncated"] is False
+    assert out["failures"] == []
+    assert len(out["messages"]) == 1
+    assert out["messages"][0]["id"] == 1
+    assert out["messages"][0]["text"] == "hello"
