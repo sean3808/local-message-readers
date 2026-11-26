@@ -188,6 +188,18 @@ def test_collect_wechat_matches_db_suffix_case_insensitively(inputs, tmp_path):
     assert "wechat/wxid_fake/db_storage/Upper.DB-shm" not in files
 
 
+def test_collect_wechat_keeps_unpaired_sidecar_shaped_files(inputs, tmp_path):
+    db_storage = inputs[1] / "db_storage"
+    (db_storage / "notes.DB-SHM").write_text("not a sidecar", encoding="utf-8")
+    (db_storage / "orphan.db-wal").write_text("no database", encoding="utf-8")
+
+    report, code = run(inputs, tmp_path)
+    assert code == 0
+    files = extract(report, tmp_path)
+    assert "wechat/wxid_fake/db_storage/notes.DB-SHM" in files
+    assert "wechat/wxid_fake/db_storage/orphan.db-wal" in files
+
+
 def test_collect_wechat_corrupt_wal_fails_wechat_preserves_teams(inputs, tmp_path):
     account = inputs[1]
     (account / "db_storage" / "broken.db").write_bytes(b"\x00" * 4096)

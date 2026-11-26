@@ -414,8 +414,8 @@ def collect_wechat(root: Path, key: Path, destination: Path) -> tuple[int, list[
                     path = Path(directory) / filename
                     if name == "db_storage":
                         lowered = filename.lower()  # Windows file names are case-insensitive
-                        if lowered.endswith((".db-wal", ".db-shm")):
-                            continue
+                        if lowered.endswith((".db-wal", ".db-shm")) and (path.parent / filename[:-4]).is_file():
+                            continue  # sidecar of a database that is snapshotted below
                         if lowered.endswith(".db"):
                             db_files.append(path)
                             continue

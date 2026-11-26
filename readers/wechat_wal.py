@@ -65,6 +65,7 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
     db_size = main_valid = len(main) // page_size
     overrides: dict[int, bytes] = {}
     pending: dict[int, bytes] = {}
+    unresolved: set[int] = set()
 
     frame_size = WAL_FRAME_HEADER_SIZE + page_size
     offset = WAL_HEADER_SIZE
@@ -91,15 +92,17 @@ def merge_committed_pages(main: bytes, wal: bytes, page_size: int = DEFAULT_PAGE
                 main_valid = min(main_valid, commit_size)
                 for stale in [p for p in overrides if p > commit_size]:
                     del overrides[stale]
+            # A page this commit needs but nobody supplies is excused only if a later commit
+            # truncates it away (a checkpoint may already have shrunk main while the WAL still
+            # holds older commits); writing it in a later commit does not excuse it.
+            unresolved = {p for p in unresolved if p <= commit_size}
+            unresolved.update(p for p in range(main_valid + 1, commit_size + 1) if p not in overrides)
             db_size = commit_size
 
         offset += frame_size
 
-    # Only the final committed state must be complete: after a checkpoint has truncated
-    # main, an earlier commit in the same WAL may reference pages that no longer exist.
-    for required in range(main_valid + 1, db_size + 1):
-        if required not in overrides:
-            raise ValueError(f"Committed WAL references missing page {required}")
+    if unresolved:
+        raise ValueError(f"Committed WAL references missing page {min(unresolved)}")
 
     out = bytearray(main[: main_valid * page_size])
     out.extend(bytes((db_size - main_valid) * page_size))
@@ -185,8 +188,8 @@ def read_snapshot(
 
     for _ in range(attempts):
         before_db = _stat_signature(source)
-        if before_db is None:
-            raise FileNotFoundError(f"WeChat database not found: {source}")
+        if before_db is None:  # being replaced right now: count it as a change and retry
+            continue
         before_wal = _stat_signature(wal_path)
 
         # Read the WAL on both sides of the main read. A checkpoint that rewrites main and
@@ -204,4 +207,4 @@ def read_snapshot(
         if (before_db, before_wal) == (after_db, after_wal) and wal_before == wal_bytes:
             return merge_committed_pages(main_bytes, wal_bytes)
 
-    raise RuntimeError(f"WeChat database changed during {attempts} snapshot attempts: {source}")
+    raise RuntimeError(f"WeChat database changed or was missing during {attempts} snapshot attempts: {source}")

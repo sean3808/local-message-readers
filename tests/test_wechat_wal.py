@@ -169,6 +169,20 @@ def test_merge_committed_pages_accepts_stale_commit_after_checkpoint_truncated_m
     assert merge_committed_pages(main, wal) == _page(1) + _page(20) + _page(30)
 
 
+def test_merge_committed_pages_rejects_missing_page_filled_by_later_commit() -> None:
+    # The first commit grows to 4 pages but never supplies page 3, and no later commit
+    # shrinks below it; writing page 3 afterwards does not make that commit valid.
+    main = _page(1) + _page(2)
+    wal = _build_wal(
+        [
+            (4, 4, _page(40), None),
+            (3, 4, _page(30), None),
+        ]
+    )
+    with pytest.raises(ValueError, match="missing page 3"):
+        merge_committed_pages(main, wal)
+
+
 def _xor_bytes(data: bytes, key: int = 0x5A) -> bytes:
     return bytes(b ^ key for b in data)
 
@@ -328,6 +342,26 @@ def test_read_snapshot_retries_when_main_vanishes_mid_read(tmp_path: Path) -> No
 
     assert read_snapshot(db_path, attempts=3, reader=flaky_reader) == _page(1)
     assert failed is True
+
+
+def test_read_snapshot_retries_while_main_is_absent_at_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import readers.wechat_wal as wal_module
+
+    db_path = tmp_path / "replaced.db"
+    db_path.write_bytes(_page(1))
+    real_stat = wal_module._stat_signature
+    calls = 0
+
+    def absent_twice(path: Path):
+        nonlocal calls
+        if path == db_path:
+            calls += 1
+            if calls in (1, 2):  # the replacement is not in place for two attempts
+                return None
+        return real_stat(path)
+
+    monkeypatch.setattr(wal_module, "_stat_signature", absent_twice)
+    assert read_snapshot(db_path, attempts=3) == _page(1)
 
 
 def test_read_snapshot_raises_on_persistent_change(tmp_path: Path) -> None:
