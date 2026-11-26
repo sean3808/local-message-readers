@@ -730,6 +730,29 @@ def test_download_unsupported_and_group_prefix_xml(
     assert out_ok["items"][0]["name"] == "group_doc.txt"
 
 
+def test_download_integer_message_content_returns_unsupported_item(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = _shard_db_path(tmp_path, 0)
+    _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=None, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    mconn = _make_msg_db(msg_db)
+    mconn.execute(f"INSERT INTO {MSG_TABLE} VALUES (?, ?, ?, ?, ?, ?)", (708, 3, 1794285100, 1, 12345, 0))
+    mconn.commit()
+    mconn.close()
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 708, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert "error" not in out
+    assert out["items"] == [{
+        "kind": None,
+        "status": "unsupported",
+        "reason": wechat_media.REASON_UNSUPPORTED_MESSAGE_TYPE,
+    }]
+
+
 @pytest.mark.parametrize("lead", ["", "\ufeff", " \ufeff\n"])
 def test_download_group_xml_without_prefix_containing_colon_newline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], lead: str
@@ -979,6 +1002,58 @@ def test_download_source_changed_mid_copy_and_no_overwrite(
     assert sorted(p.name for p in dest.iterdir()) == ["report (1).txt", "report.txt"]
 
 
+def test_download_source_path_stat_changed_mid_copy_with_stable_fstat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    msg_db = _shard_db_path(tmp_path, 0)
+    hl_db = tmp_path / "hardlink.db"
+    _, msg_root = _setup_wechat_env(monkeypatch, tmp_path, hardlink_db=hl_db, msg_dbs=[(msg_db, MSG_TABLE)])
+
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    src = fdir / "report.txt"
+    src.write_bytes(b"initial bytes")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "9992" * 8, "report.txt")
+    hl.commit()
+    hl.close()
+
+    mconn = _make_msg_db(msg_db)
+    _add_msg(mconn, 902, 49, 1794285100, _file_xml("9992" * 8))
+    mconn.commit()
+    mconn.close()
+
+    orig_stat = os.stat
+    calls = {"n": 0}
+
+    def fake_stat(path, *args, **kwargs):
+        res = orig_stat(path, *args, **kwargs)
+        if os.path.normcase(str(path)) == os.path.normcase(str(src)):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return os.stat_result((
+                    res.st_mode, res.st_ino, res.st_dev, res.st_nlink,
+                    res.st_uid, res.st_gid, res.st_size + 5,
+                    res.st_atime, res.st_mtime, res.st_ctime,
+                ))
+        return res
+
+    monkeypatch.setattr(wechat_media.os, "stat", fake_stat)
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+    code, out = _run_download(tmp_path, 902, "wxid_alice", dest, capsys)
+    assert code == 1
+    assert out["items"] == [{
+        "kind": "file",
+        "status": "not_found",
+        "reason": wechat_media.REASON_SOURCE_CHANGED,
+    }]
+    assert list(dest.iterdir()) == []
+
+
 def test_download_arg_and_lookup_errors(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1185,6 +1260,60 @@ def test_download_corrupt_shard_fails_closed_without_time_and_records_with_time(
     assert c2 == 0
     assert len(o2["failures"]) == 1
     assert o2["items"][0]["name"] == "corrupt_ok.pdf"
+
+
+def test_download_shard_stat_permission_error_fails_closed_without_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    good_db = _shard_db_path(tmp_path, 0)
+    perm_db = _shard_db_path(tmp_path, 1)
+    hl_db = tmp_path / "hardlink.db"
+
+    ts = 1794285100
+    m0 = _make_msg_db(good_db, MSG_TABLE)
+    _add_msg(m0, 83, 49, ts, _file_xml("aa33" * 8))
+    m0.commit()
+    m0.close()
+    _make_msg_db(perm_db, MSG_TABLE).close()
+
+    _, msg_root = _setup_wechat_env(
+        monkeypatch,
+        tmp_path,
+        hardlink_db=hl_db,
+        msg_dbs=[(good_db, MSG_TABLE), (perm_db, MSG_TABLE)],
+    )
+    fdir = msg_root / "file" / "2026-11"
+    fdir.mkdir(parents=True)
+    (fdir / "perm_ok.pdf").write_bytes(b"%PDF-perm")
+
+    hl = _make_hardlink_db(hl_db)
+    hl.execute("INSERT INTO dir2id (rowid, username) VALUES (1, '2026-11')")
+    _add_file_link(hl, "aa33" * 8, "perm_ok.pdf")
+    hl.commit()
+    hl.close()
+
+    orig_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if os.path.normcase(str(path)) == os.path.normcase(str(perm_db)):
+            raise PermissionError("access denied")
+        return orig_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(wechat.os, "stat", fake_stat)
+
+    dest = tmp_path / "out"
+    dest.mkdir()
+
+    c1, o1 = _run_download(tmp_path, 83, "wxid_alice", dest, capsys)
+    assert c1 == 1
+    assert len(o1["failures"]) == 1
+    assert "message_1.db" in o1["failures"][0]
+    assert list(dest.iterdir()) == []
+
+    c2, o2 = _run_download(tmp_path, 83, "wxid_alice", dest, capsys, msg_time=_iso(ts))
+    assert c2 == 0
+    assert len(o2["failures"]) == 1
+    assert o2["items"][0]["name"] == "perm_ok.pdf"
 
 
 def test_download_hardlink_db_in_hash_and_space_path(

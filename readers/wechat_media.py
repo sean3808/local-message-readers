@@ -253,7 +253,7 @@ def _query_hardlink_rows(conn: sqlite3.Connection, table: str, md5_list: list[st
 
 
 def _parse_message_xml(content: str | bytes | None, local_type: int, is_group: bool):
-    if content is None or isinstance(content, bytes):
+    if not isinstance(content, str):
         return None, REASON_UNSUPPORTED_MESSAGE_TYPE
     if content.lstrip(_XML_LEAD_JUNK).startswith("<"):
         body = content.lstrip(_XML_LEAD_JUNK)

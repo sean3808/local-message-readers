@@ -346,7 +346,13 @@ def _find_message(app, ctx, message_id, target_ts):
     matches = []
     failures = []
     for rel_key in app.msg_db_keys:
-        if not os.path.exists(os.path.join(app.db_dir, rel_key)):
+        shard_disk_path = os.path.join(app.db_dir, rel_key)
+        try:
+            os.stat(shard_disk_path)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError as e:
+            failures.append(f"{rel_key}: {e}")
             continue
         try:
             db_path = app.cache.get(rel_key)
